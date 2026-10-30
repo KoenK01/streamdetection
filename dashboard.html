@@ -337,8 +337,9 @@
 
 <script>
 const $ = (s) => document.querySelector(s);
-const PALETTE = { person: "#3ee6c4", car: "#6e8bff", truck: "#a78bfa", bus: "#f472b6", bicycle: "#facc15",
-  motorcycle: "#fb923c", boat: "#38bdf8", bird: "#a3e635", dog: "#f87171", cat: "#fbbf24", "traffic light": "#94a3b8" };
+const PALETTE = { person: "#ff5c8a", car: "#6e8bff", truck: "#a78bfa", bus: "#e879f9", bicycle: "#facc15",
+  motorcycle: "#fb923c", motorbike: "#fb923c", cyclist: "#fde047", motorcyclist: "#ff8a3d", pedestrian: "#ff5c8a",
+  boat: "#38bdf8", bird: "#a3e635", dog: "#f87171", cat: "#fbbf24", "traffic light": "#94a3b8" };
 const colorFor = (label) => {
   if (PALETTE[label]) return PALETTE[label];
   let h = 0; for (const c of label) h = (h * 31 + c.charCodeAt(0)) % 360;
@@ -556,7 +557,7 @@ function drawTile(tile, now) {
   const t = playbackTime(tile);
   tile.delay = tile.playing ? Math.max(0, tile.headT - t) : 0;
   const R = frameRect(tile, W, H);
-  const dets = detsAt(tile, t).filter((d) => d.score >= state.minConf && !state.hidden.has(d.label));
+  const dets = detsAt(tile, t).filter((d) => (d.src === "motion" || d.score >= state.minConf) && !state.hidden.has(d.label));
   const counts = {};
   for (const d of dets) { state.seenLabels.add(d.label); counts[d.label] = (counts[d.label] || 0) + 1; }
   renderCounts(tile, counts);
@@ -614,7 +615,10 @@ function drawHudBackground(ctx, R, dpr, now, big) {
 
 function drawTarget(tile, ctx, d, R, dpr, t, big) {
   const color = colorFor(d.label);
-  const x1 = R.ox + d.box[0] * R.sx, y1 = R.oy + d.box[1] * R.sy, x2 = R.ox + d.box[2] * R.sx, y2 = R.oy + d.box[3] * R.sy;
+  let x1 = R.ox + d.box[0] * R.sx, y1 = R.oy + d.box[1] * R.sy, x2 = R.ox + d.box[2] * R.sx, y2 = R.oy + d.box[3] * R.sy;
+  const minSide = 16 * dpr; // people seen from above are a few pixels, keep their brackets readable
+  if (x2 - x1 < minSide) { const m = (x1 + x2) / 2; x1 = m - minSide / 2; x2 = m + minSide / 2; }
+  if (y2 - y1 < minSide) { const m = (y1 + y2) / 2; y1 = m - minSide / 2; y2 = m + minSide / 2; }
   const w = x2 - x1, h = y2 - y1, c = Math.min(16 * dpr, w / 3, h / 3);
   const tr = tile.tracks.get(d.id);
   const fade = d.held > 0.25 ? Math.max(0, 1 - (d.held - 0.25) / (HOLD - 0.25)) : 1; // held boxes stay solid briefly, then fade
@@ -667,14 +671,17 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
     const fs = (big ? 10.5 : 9.5) * dpr;
     ctx.font = `700 ${fs}px ${MONO}`; ctx.textBaseline = "middle";
     const age = tr ? Math.max(0, t - tr.first) : 0;
-    const line1 = hud ? `TRK#${pad(d.id, 3)} ${d.label.toUpperCase()} ${Math.round(d.score * 100)}%` : `${d.label} ${Math.round(d.score * 100)}%`;
+    const motion = d.src === "motion";
+    const tag = motion ? `M${pad(d.id % 1e6, 3)}` : pad(d.id, 3);
+    const how = motion ? `${(d.mps ?? 0).toFixed(1)}M/S` : `${Math.round(d.score * 100)}%`;
+    const line1 = hud ? `TRK#${tag} ${d.label.toUpperCase()} ${how}` : `${d.label}${motion ? "" : ` ${Math.round(d.score * 100)}%`}`;
     const tw = ctx.measureText(line1).width, ph = fs + 7 * dpr, px = 5 * dpr;
     const ly = y1 - ph - 2 * dpr < R.oy ? y2 + 2 * dpr : y1 - ph - 2 * dpr;
     ctx.fillStyle = color; ctx.fillRect(x1, ly, tw + px * 2, ph);
     ctx.fillStyle = "#04070a"; ctx.fillText(line1, x1 + px, ly + ph / 2 + 0.5 * dpr);
     if (hud && big) {
       const cx = (d.box[0] + d.box[2]) / 2, cy = (d.box[1] + d.box[3]) / 2;
-      const line2 = `X${pad(cx, 4)} Y${pad(cy, 4)}  ${Math.round(d.box[2] - d.box[0])}x${Math.round(d.box[3] - d.box[1])}  T+${age.toFixed(1)}S`;
+      const line2 = `X${pad(cx, 4)} Y${pad(cy, 4)}  ${Math.round(d.box[2] - d.box[0])}x${Math.round(d.box[3] - d.box[1])}  T+${age.toFixed(1)}S${d.src === "motion" ? "  VIA MOTION" : ""}`;
       ctx.font = `600 ${9 * dpr}px ${MONO}`;
       const tw2 = ctx.measureText(line2).width, ph2 = 9 * dpr + 6 * dpr;
       const ly2 = ly < y1 ? ly - ph2 : ly + ph;
@@ -713,7 +720,8 @@ function drawTelemetry(tile, ctx, W, H, R, dpr, nDets, big) {
       ctx.globalAlpha = 1 - i * 0.16;
       ctx.fillStyle = i === 0 ? HUD : "rgba(62,230,196,.8)";
       const when = new Date((e.ts + tile.delay) * 1000).toTimeString().slice(0, 8);
-      ctx.fillText(`[${when}] ACQ TRK#${pad(e.id, 3)} ${e.label.toUpperCase()} ${Math.round(e.score * 100)}%`, right, bottom - i * lh);
+      const tag = e.src === "motion" ? `M${pad(e.id % 1e6, 3)}` : pad(e.id, 3), how = e.src === "motion" ? `${(e.mps ?? 0).toFixed(1)}M/S` : `${Math.round(e.score * 100)}%`;
+      ctx.fillText(`[${when}] ACQ TRK#${tag} ${e.label.toUpperCase()} ${how}`, right, bottom - i * lh);
     });
   }
   ctx.restore();
@@ -830,7 +838,7 @@ async function refreshEvents() {
 function renderFeed() {
   const now = Date.now() / 1000;
   const delayOf = (cam) => state.tiles.get(cam)?.delay || 0;
-  const shown = state.events.filter((e) => !state.hidden.has(e.label) && e.score >= state.minConf && now - e.ts >= delayOf(e.cam)).slice(0, 100);
+  const shown = state.events.filter((e) => !state.hidden.has(e.label) && (e.src === "motion" || e.score >= state.minConf) && now - e.ts >= delayOf(e.cam)).slice(0, 100);
   const feed = $("#feed");
   $("#feedCount").textContent = shown.length ? `${shown.length} recent` : "";
   const key = shown.map((e) => `${e.cam}:${e.id}`).join(",");
@@ -842,7 +850,7 @@ function renderFeed() {
     <li style="${before.has(`${e.cam}:${e.id}`) ? "animation:none" : ""}">
       ${e.has_thumb ? `<img class="thumb" loading="lazy" src="/api/event_thumb?cam=${encodeURIComponent(e.cam)}&id=${e.id}" alt="">` : `<div class="thumb"></div>`}
       <div style="min-width:0"><div class="what"><i style="background:${colorFor(e.label)}"></i>${esc(e.label)}</div>
-      <div class="where">${esc(e.cam)} · ${Math.round(e.score * 100)}% · #${e.id}</div></div>
+      <div class="where">${esc(e.cam)} · ${e.src === "motion" ? `${(e.mps ?? 0).toFixed(1)} m/s · motion` : `${Math.round(e.score * 100)}% · #${e.id}`}</div></div>
       <div class="when" data-ts="${e.ts + delayOf(e.cam)}">${ago(e.ts + delayOf(e.cam))}</div>
     </li>`).join("");
 }

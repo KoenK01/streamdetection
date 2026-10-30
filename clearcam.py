@@ -29,6 +29,7 @@ import multiprocessing
 import re
 import base64
 from utils.helpers import send_notif, find_ffmpeg, export_clip, upload_file, encrypt_file, export_and_upload, jit_infer
+from utils.motion import MotionDetector
 from utils.helpers import is_webcam, parse_webcam, webcam_input_args, list_webcams, resolve_stream, stream_info
 import pickle
 import contextlib
@@ -47,6 +48,7 @@ from utils.helpers import BASE_DIR
 from ocsort_tracker import ocsort
 
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
+RIDER_LABELS = {"bicycle": "cyclist", "motorbike": "motorcyclist", "motorcycle": "motorcyclist"}
 DETECT_FPS = 20 # frames per second handed to the detector, the recording keeps the full rate
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
 
@@ -218,6 +220,8 @@ class VideoCapture:
     self.events = {}
     self.totals = {}
     self.seen = {}
+    self.riders = {} # cam -> {person track id: (rider label, vehicle track id, frames seen together)}
+    self.motion, self.motion_out = {}, {}
     # stream time (seconds on the recording's timeline) of each frame, so the dashboard can line detections up with the video
     self.stream_base, self.raw_index, self.raw_frame_t, self.cur_t, self.playlist_url, self.det_history = {}, {}, {}, {}, {}, {}
 
@@ -266,6 +270,10 @@ class VideoCapture:
     self.events[cam_name] = deque(maxlen=60)
     self.totals[cam_name] = defaultdict(int)
     self.seen[cam_name] = set()
+    self.riders[cam_name] = {}
+    self.motion[cam_name] = MotionDetector()
+    self.motion_out[cam_name] = []
+    if not self.vod[cam_name]: threading.Thread(target=self.motion_loop, args=(cam_name,), daemon=True).start()
     self.det_history[cam_name] = deque(maxlen=DETECT_FPS * 60) # a minute, comfortably more than the HLS player's delay
     alerts_on[cam_name] = True
 
@@ -600,27 +608,81 @@ class VideoCapture:
     shutil.rmtree(BASE_DIR / "cameras" / cam_name / "faces", ignore_errors=True)
     shutil.rmtree(BASE_DIR / "cameras" / cam_name / "event_images", ignore_errors=True)
 
+  def pair_riders(self, cam_name, targets):
+    # the detector sees a cyclist as a person plus a bicycle; a person sitting on one becomes a rider, and stays one
+    riders = self.riders[cam_name]
+    if len(riders) > 500: riders.clear()
+    people = [x for x in targets if class_labels[int(x.class_id)] == "person"]
+    for v in targets:
+      kind = RIDER_LABELS.get(class_labels[int(v.class_id)])
+      if not kind: continue
+      vx, vy, vw, vh = v.tlwh
+      for p in people:
+        px, py, pw, ph = p.tlwh
+        overlap_x = min(vx + vw, px + pw) - max(vx, px)
+        on_top = py + ph / 2 < vy + vh / 2 and py + ph >= vy - 0.15 * vh and py < vy + vh
+        if overlap_x >= 0.4 * min(vw, pw) and on_top:
+          pid, vid = int(p.track_id), int(v.track_id)
+          hits = riders[pid][2] + 1 if pid in riders and riders[pid][1] == vid else 1
+          riders[pid] = (kind, vid, hits)
+          break
+    # only after 3 frames on the same bike, so someone walking past parked bikes stays a person
+    confirmed = {pid: (kind, vid) for pid, (kind, vid, hits) in riders.items() if hits >= 3}
+    live_ids = {int(x.track_id) for x in targets}
+    return confirmed, {vid for pid, (_, vid) in confirmed.items() if pid in live_ids}
+
+  def motion_loop(self, cam_name):
+    # runs beside the detector instead of in series with it; OpenCV releases the GIL for the heavy parts
+    last = -1
+    while self.running.get(cam_name) and (BASE_DIR / "cameras" / cam_name).exists():
+      n, frame = self.frame_num[cam_name], self.raw_frame[cam_name]
+      if n == last or frame is None:
+        time.sleep(0.02)
+        continue
+      last, t, live = n, self.raw_frame_t.get(cam_name, 0), self.live.get(cam_name)
+      known = [d["box"] for d in live["dets"] if d.get("src") != "motion"] if live else []
+      try: self.motion_out[cam_name] = self.motion[cam_name].update(frame, t, known)
+      except Exception as e: print(f"motion error on {cam_name}: {e}")
+      time.sleep(0.06) # ~12 runs a second is plenty to follow people
+
   def update_live(self, cam_name, frame, targets):
     prev, now = self.live[cam_name], time.time()
     fps = prev["fps"] if prev else 0
     if prev and now > prev["ts"]: fps = 0.8 * fps + 0.2 / (now - prev["ts"]) if fps else 1 / (now - prev["ts"])
-    dets = []
+    riders, ridden = self.pair_riders(cam_name, targets)
+    by_id = {int(x.track_id): x for x in targets}
+    found = [] # (id, label, box, score, ready for an event, extra fields)
     for x in targets:
+      if int(x.track_id) in ridden: continue # drawn as part of its rider
       x1, y1, w, h = map(float, x.tlwh)
       label = class_labels[int(x.class_id)]
-      dets.append({"box": [x1, y1, x1 + w, y1 + h], "score": round(float(x.score), 3), "label": label, "id": int(x.track_id)})
-      if x.tracklet_len >= 3 and int(x.track_id) not in self.seen[cam_name]: # 3 frames in a row, skips most flicker
-        self.seen[cam_name].add(int(x.track_id))
+      box = [x1, y1, x1 + w, y1 + h]
+      if int(x.track_id) in riders:
+        label, vid = riders[int(x.track_id)]
+        if vid in by_id: # one box around rider and bike
+          vx, vy, vw, vh = map(float, by_id[vid].tlwh)
+          box = [min(box[0], vx), min(box[1], vy), max(box[2], vx + vw), max(box[3], vy + vh)]
+      found.append((int(x.track_id), label, box, round(float(x.score), 3), x.tracklet_len >= 3, {})) # 3 frames in a row, skips most flicker
+    if not self.vod[cam_name]: # small movers the detector can't see, labelled by speed
+      self.motion[cam_name].learn_scale([max(x.tlwh[2], x.tlwh[3]) for x in targets if class_labels[int(x.class_id)] == "car" and x.score >= 0.5])
+      for tid, label, box, mps in self.motion_out.get(cam_name, ()): # filled by motion_loop
+        found.append((tid, label, box, 0.5, True, {"src": "motion", "mps": round(mps, 1)}))
+    dets = []
+    for tid, label, box, score, ready, extra in found:
+      dets.append({"box": box, "score": score, "label": label, "id": tid, **extra})
+      if ready and tid not in self.seen[cam_name]:
+        self.seen[cam_name].add(tid)
         self.totals[cam_name][label] += 1
         H, W = frame.shape[:2]
-        pad = 0.15 * max(w, h)
-        crop = frame[max(0, int(y1 - pad)):min(H, int(y1 + h + pad)), max(0, int(x1 - pad)):min(W, int(x1 + w + pad))]
+        x1, y1, x2, y2 = box
+        pad = max(0.15 * max(x2 - x1, y2 - y1), 24) # tiny movers get some context around them
+        crop = frame[max(0, int(y1 - pad)):min(H, int(y2 + pad)), max(0, int(x1 - pad)):min(W, int(x2 + pad))]
         thumb = None
         if crop.size:
           scale = 160 / max(crop.shape[:2])
           if scale < 1: crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
           thumb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
-        self.events[cam_name].append({"cam": cam_name, "ts": now, "label": label, "score": round(float(x.score), 3), "id": int(x.track_id), "thumb": thumb})
+        self.events[cam_name].append({"cam": cam_name, "ts": now, "label": label, "score": score, "id": tid, "thumb": thumb, **extra})
     seq, t = (prev["seq"] + 1) if prev else 0, round(self.cur_t.get(cam_name, 0), 3)
     self.live[cam_name] = {"seq": seq, "ts": now, "t": t, "fps": fps, "frame": frame, "jpeg": None,
                            "w": frame.shape[1], "h": frame.shape[0], "dets": dets}

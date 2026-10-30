@@ -7,6 +7,8 @@ Built on [clearcam](https://github.com/roryclear/clearcam) by Rory Clear. See [C
 ## Features
 - Dashboard with a live tile per stream: the exact frame the detector processed, with its boxes, so boxes never lag the picture
 - YouTube and Twitch links resolved to their HLS feed with yt-dlp, re-resolved on every reconnect because those links expire
+- Pedestrians and cyclists on high, overhead cameras through a motion layer: small movers the detector can't recognise are tracked and labelled by real-world speed (walking under ~2.6 m/s, cycling under ~9 m/s), with the scale learned from the cars on that camera
+- People on bikes are shown as one cyclist / motorcyclist box
 - Activity feed with a crop of each new object, session totals per class
 - Class filter, minimum confidence slider, focus mode (double click a tile)
 - Recordings kept as HLS per stream per day

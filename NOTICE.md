@@ -15,4 +15,6 @@ Based on clearcam commit `cf3909f8a622408be3b5f9811e4a9a56426b3134` (2026-10-28)
 - Model downloads use the operating system certificate store (truststore)
 - Dashboard plays each stream's recording as smooth video (hls.js) and syncs detections to it by stream time (`/api/dets`), with a HUD overlay (track IDs, trails, velocity, telemetry, acquisition log)
 - Tracking: OC-SORT keeps confirmed tracks visible through a missed frame (`ocsort_tracker/ocsort.py`), new tracks after 2 hits instead of 3, BYTE association of low confidence detections, default threshold 0.4; default detector YOLOv9-s at 1280 instead of YOLOv9-t at 960
+- Motion layer (`utils/motion.py`): background subtraction finds small moving objects the detector misses (people and cyclists seen from above), tracks them, and labels them pedestrian or cyclist by real-world speed, with metres per pixel learned from detected cars
+- People on a bicycle or motorbike are merged with it into one cyclist / motorcyclist track
 - HTTP server listens dual stack (IPv4 and IPv6) and sends static files with Content-Length
