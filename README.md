@@ -17,6 +17,7 @@ Built on [clearcam](https://github.com/roryclear/clearcam) by Rory Clear. See [C
 ## Requirements
 - Python 3.11 or later
 - ffmpeg 5.1 or later on your PATH
+- Node.js (optional, recommended): some YouTube streams only resolve when yt-dlp can solve a JS challenge with it
 
 ## Run
 ```

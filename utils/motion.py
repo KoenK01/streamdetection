@@ -18,6 +18,7 @@ LOST_AFTER = 1.0 # seconds without a matching blob before a track ends
 REATTACH_WITHIN = 8.0 # an ended track can be taken over by a new blob for this long, so nobody is counted twice
 REATTACH_MAX_PX = 60 # but never further than this from where it should be, or boxes hop onto unrelated blobs
 LANE_CELL = 16 # px, resolution of the learned car lane map
+PAN_FRACTION = 0.12 # more of the picture than this changing at once means the camera itself moved (PTZ cams)
 ID_OFFSET = 1_000_000 # keeps motion track ids apart from detector track ids
 
 class MotionDetector:
@@ -37,6 +38,7 @@ class MotionDetector:
     self.labels = {} # track id -> "pedestrian" / "cyclist" once classified
     self.lost = {} # recently ended tracks that a new blob can still take over: id -> (pos, vel, wh, t_last, hits)
     self.lanes, self.lane_mask, self.lane_updates = None, None, 0 # where the detector keeps seeing vehicles
+    self.panning = False
 
   def learn_scale(self, car_lengths_px):
     # cars are ~4.5m long, their median size in pixels gives metres per pixel for this camera. the median runs over
@@ -69,6 +71,9 @@ class MotionDetector:
     """frame: BGR full res, t: stream time in seconds, known_boxes: [x1,y1,x2,y2] the detector already explains.
     returns [(track_id, label, box, speed_mps)] for tracks classified as pedestrian or cyclist"""
     cents, wh = self.blobs(frame, known_boxes)
+    if self.panning: # everything shifts while the camera moves: drop what we had and start over once it settles
+      self.reset_tracks()
+      return []
     self.track(cents, wh, t)
     out = []
     for i in np.flatnonzero((self.t_last == t) & (self.hits >= 3)):
@@ -87,7 +92,10 @@ class MotionDetector:
     k = self.width / W
     small = cv2.resize(frame, (self.width, int(H * k)), interpolation=cv2.INTER_AREA)
     gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (3, 3), 0)
-    mask = self.bg.apply(gray)
+    # while the camera moves, learn the new view fast instead of over the usual few hundred frames
+    mask = self.bg.apply(gray, learningRate=0.2 if self.panning else -1)
+    self.panning = cv2.countNonZero(mask) > PAN_FRACTION * mask.size
+    if self.panning: return np.zeros((0, 2)), np.zeros((0, 2))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.k_open)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.k_close)
     _, _, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
@@ -102,6 +110,12 @@ class MotionDetector:
     idx = np.flatnonzero(keep)
     if len(idx) > MAX_BLOBS: idx = idx[np.argsort(stats[idx, 4])[:MAX_BLOBS]]
     return cents[idx], stats[idx, 2:4] / k
+
+  def reset_tracks(self):
+    self.ids, self.hits = np.zeros(0, np.int64), np.zeros(0, np.int64)
+    self.pos, self.vel, self.wh = np.zeros((0, 2)), np.zeros((0, 2)), np.zeros((0, 2))
+    self.t_last = np.zeros(0)
+    self.trails.clear(); self.labels.clear(); self.lost.clear()
 
   def track(self, cents, wh, t):
     # match blobs to where each track should be now (constant velocity), nearest first, within a size based gate

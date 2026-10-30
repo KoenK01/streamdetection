@@ -256,6 +256,8 @@ def resolve_stream(src, max_age=1800):
         import yt_dlp
         opts = {"quiet": True, "no_warnings": True, "skip_download": True,
                 "format": "bv*[height<=1080][vcodec^=avc1]/bv*[height<=1080]/bv*/b"}
+        # some YouTube videos only resolve after solving a JS challenge: yt-dlp-ejs has the scripts, node runs them
+        if shutil.which("node"): opts["js_runtimes"] = {"node": {}}
         with yt_dlp.YoutubeDL(opts) as ydl: info = ydl.extract_info(src, download=False)
     except Exception as e:
         print(f"could not resolve {src}: {e}")
