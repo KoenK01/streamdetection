@@ -1173,8 +1173,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           return self.send_json({k: live[k] for k in ("seq", "ts", "fps", "w", "h", "dets")})
         if path == "/api/frame": # the detections ride along in a header so boxes always match the exact frame
           live = cam.live.get(cam_name)
-          if not live: return self.send_error(404)
-          if live["seq"] <= int(query.get("after", [-1])[0]):
+          if not live or live["seq"] <= int(query.get("after", [-1])[0]): # nothing (new) yet
             self.send_response(204)
             self.end_headers()
             return

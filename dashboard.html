@@ -451,7 +451,7 @@ async function warmup(tile) {
   while (tile.alive && !tile.playing) {
     try {
       const r = await fetchT(`/api/frame?cam=${encodeURIComponent(tile.name)}`);
-      if (r.ok) {
+      if (r.status === 200) {
         const url = URL.createObjectURL(await r.blob());
         tile.still.onload = () => URL.revokeObjectURL(url);
         tile.still.src = url; tile.still.hidden = false;
@@ -500,6 +500,7 @@ function detsAt(tile, t) {
 // a track the detector briefly loses keeps moving along its last velocity and fades out,
 // instead of blinking off and on; most gaps are shorter than this
 const HOLD = 1.2;
+const LOCK_TIME = 0.2;
 function withHeld(f, lo, t, dets) {
   const have = new Set(dets.map((d) => d.id));
   const out = [...dets];
@@ -645,24 +646,21 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
   // box: faint fill, thin frame, bright corner brackets
   ctx.globalAlpha = fade * 0.07; ctx.fillStyle = color; ctx.fillRect(x1, y1, w, h);
   ctx.globalAlpha = fade * 0.4; ctx.strokeStyle = color; ctx.lineWidth = 1 * dpr; ctx.strokeRect(x1, y1, w, h);
+  // lock-on: a new track's brackets start just outside the box and snap onto it in LOCK_TIME seconds
+  const p = hud && tr ? Math.min(1, Math.max(0, t - tr.first) / LOCK_TIME) : 1;
+  const g = (1 - p) ** 3 * Math.min(10 * dpr, 0.3 * Math.max(w, h));
+  const bx1 = x1 - g, by1 = y1 - g, bx2 = x2 + g, by2 = y2 + g;
   ctx.globalAlpha = fade * 1; ctx.lineWidth = 2.2 * dpr; ctx.lineCap = "square";
   ctx.beginPath();
-  ctx.moveTo(x1, y1 + c); ctx.lineTo(x1, y1); ctx.lineTo(x1 + c, y1);
-  ctx.moveTo(x2 - c, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + c);
-  ctx.moveTo(x2, y2 - c); ctx.lineTo(x2, y2); ctx.lineTo(x2 - c, y2);
-  ctx.moveTo(x1 + c, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - c);
+  ctx.moveTo(bx1, by1 + c); ctx.lineTo(bx1, by1); ctx.lineTo(bx1 + c, by1);
+  ctx.moveTo(bx2 - c, by1); ctx.lineTo(bx2, by1); ctx.lineTo(bx2, by1 + c);
+  ctx.moveTo(bx2, by2 - c); ctx.lineTo(bx2, by2); ctx.lineTo(bx2 - c, by2);
+  ctx.moveTo(bx1 + c, by2); ctx.lineTo(bx1, by2); ctx.lineTo(bx1, by2 - c);
   ctx.stroke();
   if (hud) {
     // centre tick
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, k = 4 * dpr;
     ctx.lineWidth = 1 * dpr; ctx.beginPath(); ctx.moveTo(mx - k, my); ctx.lineTo(mx + k, my); ctx.moveTo(mx, my - k); ctx.lineTo(mx, my + k); ctx.stroke();
-    // lock-on flash for a new track
-    const age = tr ? t - tr.first : 9;
-    if (age < 0.9) {
-      const e = 1 - age / 0.9, g = (1 - e) * 18 * dpr + 3 * dpr;
-      ctx.globalAlpha = fade * e; ctx.lineWidth = 1.5 * dpr; ctx.strokeRect(x1 - g, y1 - g, w + g * 2, h + g * 2);
-      ctx.globalAlpha = fade * 1;
-    }
   }
   // labels
   if (w > 18 * dpr) {
