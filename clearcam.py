@@ -48,6 +48,7 @@ from utils.helpers import BASE_DIR
 from ocsort_tracker import ocsort
 
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
+VEHICLE_LABELS = {"car", "truck", "bus", "train"}
 RIDER_LABELS = {"bicycle": "cyclist", "motorbike": "motorcyclist", "motorcycle": "motorcyclist"}
 DETECT_FPS = 20 # frames per second handed to the detector, the recording keeps the full rate
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
@@ -640,8 +641,10 @@ class VideoCapture:
       if n == last or frame is None:
         time.sleep(0.02)
         continue
-      last, t, live = n, self.raw_frame_t.get(cam_name, 0), self.live.get(cam_name)
-      known = [d["box"] for d in live["dets"] if d.get("src") != "motion"] if live else []
+      last, t = n, self.raw_frame_t.get(cam_name, 0)
+      # everything the detector boxed in the last second, so a car it misses for a frame or two isn't a "cyclist"
+      recent = [f for f in list(self.det_history[cam_name])[-40:] if t - f["t"] <= 1.0]
+      known = [d["box"] for f in recent for d in f["dets"] if d.get("src") != "motion"]
       try: self.motion_out[cam_name] = self.motion[cam_name].update(frame, t, known)
       except Exception as e: print(f"motion error on {cam_name}: {e}")
       time.sleep(0.06) # ~12 runs a second is plenty to follow people
@@ -666,6 +669,8 @@ class VideoCapture:
       found.append((int(x.track_id), label, box, round(float(x.score), 3), x.tracklet_len >= 3, {})) # 3 frames in a row, skips most flicker
     if not self.vod[cam_name]: # small movers the detector can't see, labelled by speed
       self.motion[cam_name].learn_scale([max(x.tlwh[2], x.tlwh[3]) for x in targets if class_labels[int(x.class_id)] == "car" and x.score >= 0.5])
+      self.motion[cam_name].learn_lanes([[x.tlwh[0], x.tlwh[1], x.tlwh[0] + x.tlwh[2], x.tlwh[1] + x.tlwh[3]] for x in targets
+                                         if class_labels[int(x.class_id)] in VEHICLE_LABELS and x.score >= 0.4], frame.shape[1], frame.shape[0])
       t_now, since = self.cur_t.get(cam_name, 0), self.motion_since[cam_name]
       if len(since) > 2000: since.clear()
       for tid, label, box, mps in self.motion_out.get(cam_name, ()): # filled by motion_loop
@@ -1234,6 +1239,14 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           frames = [f for f in list(cam.det_history.get(cam_name, ())) if f["seq"] > after]
           if after < 0 and frames: frames = [f for f in frames if f["t"] >= frames[-1]["t"] - 30] # first load: enough to cover the player's delay
           return self.send_json({"w": live["w"] if live else None, "h": live["h"] if live else None, "frames": frames})
+        if path == "/api/motion": # what the motion layer has learned for a camera, for checking it does the right thing
+          m = cam.motion.get(cam_name)
+          if not m: return self.send_error(404)
+          lanes = m.lane_mask
+          return self.send_json({"px_per_m": m.px_per_m, "lane_updates": m.lane_updates, "tracks": int(len(m.ids)), "lost": len(m.lost),
+                                 "lane_coverage": float(lanes.mean()) if lanes is not None else None,
+                                 "lane_max": float(m.lanes.max()) if m.lanes is not None else None,
+                                 "lane_p95": float(np.percentile(m.lanes[m.lanes > 0], 95)) if m.lanes is not None and (m.lanes > 0).any() else None})
         if path == "/api/live":
           live = cam.live.get(cam_name)
           if not live: return self.send_json({"seq": -1, "dets": []})

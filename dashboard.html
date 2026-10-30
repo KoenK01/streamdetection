@@ -508,10 +508,11 @@ function withHeld(f, lo, t, dets) {
   for (let i = lo; i >= 0 && t - f[i].t <= HOLD; i--)
     for (const d of f[i].dets) {
       if (have.has(d.id)) continue;
-      have.add(d.id);
       const held = t - f[i].t;
+      if (d.src === "motion" && held > 0.3) continue; // motion targets don't coast: a box with nothing under it is worse than a gap
+      have.add(d.id);
       let v = [0, 0];
-      for (let j = i - 1; j >= 0 && f[i].t - f[j].t <= 0.6; j--) {
+      for (let j = i - 1; j >= 0 && d.src !== "motion" && f[i].t - f[j].t <= 0.6; j--) {
         const p = f[j].dets.find((x) => x.id === d.id);
         if (p && f[i].t - f[j].t >= 0.15) {
           const dt = f[i].t - f[j].t;
