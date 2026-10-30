@@ -221,7 +221,7 @@ class VideoCapture:
     self.totals = {}
     self.seen = {}
     self.riders = {} # cam -> {person track id: (rider label, vehicle track id, frames seen together)}
-    self.motion, self.motion_out = {}, {}
+    self.motion, self.motion_out, self.motion_since = {}, {}, {}
     # stream time (seconds on the recording's timeline) of each frame, so the dashboard can line detections up with the video
     self.stream_base, self.raw_index, self.raw_frame_t, self.cur_t, self.playlist_url, self.det_history = {}, {}, {}, {}, {}, {}
 
@@ -273,6 +273,7 @@ class VideoCapture:
     self.riders[cam_name] = {}
     self.motion[cam_name] = MotionDetector()
     self.motion_out[cam_name] = []
+    self.motion_since[cam_name] = {} # motion track id -> stream time it was first shown
     if not self.vod[cam_name]: threading.Thread(target=self.motion_loop, args=(cam_name,), daemon=True).start()
     self.det_history[cam_name] = deque(maxlen=DETECT_FPS * 60) # a minute, comfortably more than the HLS player's delay
     alerts_on[cam_name] = True
@@ -665,8 +666,12 @@ class VideoCapture:
       found.append((int(x.track_id), label, box, round(float(x.score), 3), x.tracklet_len >= 3, {})) # 3 frames in a row, skips most flicker
     if not self.vod[cam_name]: # small movers the detector can't see, labelled by speed
       self.motion[cam_name].learn_scale([max(x.tlwh[2], x.tlwh[3]) for x in targets if class_labels[int(x.class_id)] == "car" and x.score >= 0.5])
+      t_now, since = self.cur_t.get(cam_name, 0), self.motion_since[cam_name]
+      if len(since) > 2000: since.clear()
       for tid, label, box, mps in self.motion_out.get(cam_name, ()): # filled by motion_loop
-        found.append((tid, label, box, 0.5, True, {"src": "motion", "mps": round(mps, 1)}))
+        # only counted (totals, feed) after 3s on screen, so short fragments of someone already counted don't add up
+        ready = t_now - since.setdefault(tid, t_now) >= 3.0
+        found.append((tid, label, box, 0.5, ready, {"src": "motion", "mps": round(mps, 1)}))
     dets = []
     for tid, label, box, score, ready, extra in found:
       dets.append({"box": box, "score": score, "label": label, "id": tid, **extra})

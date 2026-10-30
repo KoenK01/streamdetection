@@ -14,6 +14,7 @@ MAX_SIZE_M = 2.5 # a person or a bike seen from above
 MIN_TRAVEL_M = 1.0 # has to actually get somewhere before it is labelled
 MAX_BLOBS = 60 # beyond this the frame is mostly noise (rain, a flashing screen), keep the smallest
 LOST_AFTER = 1.0 # seconds without a matching blob before a track ends
+REATTACH_WITHIN = 8.0 # an ended track can be taken over by a new blob for this long, so nobody is counted twice
 ID_OFFSET = 1_000_000 # keeps motion track ids apart from detector track ids
 
 class MotionDetector:
@@ -30,6 +31,7 @@ class MotionDetector:
     self.t_last = np.zeros(0)
     self.trails = {} # track id -> deque of (t, cx, cy)
     self.labels = {} # track id -> "pedestrian" / "cyclist" once classified
+    self.lost = {} # recently ended tracks that a new blob can still take over: id -> (pos, vel, wh, t_last, hits)
 
   def learn_scale(self, car_lengths_px):
     # cars are ~4.5m long, their median size in pixels gives metres per pixel for this camera
@@ -97,14 +99,45 @@ class MotionDetector:
       self.hits[j] += 1
     n = int((~got).sum())
     if n:
-      self.ids = np.concatenate([self.ids, np.arange(self.next_id, self.next_id + n)]); self.next_id += n
-      self.pos, self.wh = np.vstack([self.pos, cents[~got]]), np.vstack([self.wh, wh[~got]])
-      self.vel = np.vstack([self.vel, np.zeros((n, 2))])
-      self.t_last, self.hits = np.concatenate([self.t_last, np.full(n, t)]), np.concatenate([self.hits, np.ones(n, np.int64)])
+      new_c, new_wh = cents[~got], wh[~got]
+      ids, vel, hits = np.arange(self.next_id, self.next_id + n), np.zeros((n, 2)), np.ones(n, np.int64)
+      for i, lid in self.reattach(new_c, new_wh, t).items(): # same person back after a tree, a tram, a lamp post
+        lp, lv, lwh, lt, lh = self.lost.pop(lid)
+        ids[i], vel[i], hits[i] = lid, lv, lh + 1
+      fresh = ids >= self.next_id
+      ids[fresh] = np.arange(self.next_id, self.next_id + int(fresh.sum())); self.next_id += int(fresh.sum())
+      self.ids, self.pos, self.wh = np.concatenate([self.ids, ids]), np.vstack([self.pos, new_c]), np.vstack([self.wh, new_wh])
+      self.vel = np.vstack([self.vel, vel])
+      self.t_last, self.hits = np.concatenate([self.t_last, np.full(n, t)]), np.concatenate([self.hits, hits])
     alive = t - self.t_last <= LOST_AFTER
     if not alive.all():
-      for tid in self.ids[~alive]: self.trails.pop(int(tid), None); self.labels.pop(int(tid), None)
+      for i in np.flatnonzero(~alive): # established tracks can still be taken over for a while, the rest just end
+        tid = int(self.ids[i])
+        if self.hits[i] >= 3: self.lost[tid] = (self.pos[i].copy(), self.vel[i].copy(), self.wh[i].copy(), float(self.t_last[i]), int(self.hits[i]))
+        else: self.trails.pop(tid, None); self.labels.pop(tid, None)
       self.ids, self.hits, self.pos, self.vel, self.wh, self.t_last = (a[alive] for a in (self.ids, self.hits, self.pos, self.vel, self.wh, self.t_last))
+    for tid in [tid for tid, v in self.lost.items() if t - v[3] > REATTACH_WITHIN]:
+      del self.lost[tid]; self.trails.pop(tid, None); self.labels.pop(tid, None)
+
+  def reattach(self, cents, wh, t):
+    """match new blobs to recently lost tracks: where the track would be by now at its last velocity,
+    within a radius that grows with how long it was gone and how fast it moved. returns {blob index: lost id}"""
+    if not self.lost or not len(cents): return {}
+    lids = list(self.lost)
+    lp = np.array([self.lost[i][0] for i in lids]); lv = np.array([self.lost[i][1] for i in lids])
+    lwh = np.array([self.lost[i][2] for i in lids]); lt = np.array([self.lost[i][3] for i in lids])
+    gone = (t - lt)[None, :]
+    d = np.linalg.norm(cents[:, None, :] - (lp + lv * (t - lt)[:, None])[None], axis=-1)
+    radius = 15.0 + 1.0 * np.linalg.norm(lv, axis=1)[None, :] * gone + 2.0 * lwh.max(1)[None, :] # room to turn a corner
+    size_ok = np.abs(wh.max(1)[:, None] - lwh.max(1)[None, :]) <= 1.5 * lwh.max(1)[None, :] + 4
+    d[(d > radius) | ~size_ok] = np.inf
+    out = {}
+    for _ in range(min(d.shape)):
+      i, j = np.unravel_index(np.argmin(d), d.shape)
+      if not np.isfinite(d[i, j]): break
+      out[int(i)] = lids[j]
+      d[i, :], d[:, j] = np.inf, np.inf
+    return out
 
   def speed(self, trail):
     if not self.px_per_m or len(trail) < 2 or trail[-1][0] - trail[0][0] <= 0: return 0.0
