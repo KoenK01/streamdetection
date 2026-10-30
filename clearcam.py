@@ -305,8 +305,12 @@ class VideoCapture:
       # (Windows pipes deliver a frame in thousands of small reads) and detection drops below 1fps
       if not any(self.vod[c] or self.frame_num.get(c) != self.last_frame_num.get(c) for c in cams.keys()): time.sleep(0.005)
       for cam_name in cams.keys():
-        if self.vod[cam_name]: self.process_frame_vod(cam_name=cam_name)
-        else: self.process_frame(cam_name=cam_name)
+        try: # one camera's problem must not take the whole server down
+          if self.vod[cam_name]: self.process_frame_vod(cam_name=cam_name)
+          else: self.process_frame(cam_name=cam_name)
+        except Exception as e:
+          print(f"error processing {cam_name}: {e!r}")
+          time.sleep(0.5)
       process_queue()
       if len(object_queue) > 0:
         try:

@@ -1,4 +1,4 @@
-import os, sqlite3, contextlib, pickle
+import os, sqlite3, contextlib, pickle, threading
 from typing import Any
 #from tinygrad.helpers import diskcache_get
 
@@ -62,7 +62,7 @@ def diskcache_delete(table: str, key: dict|str|int, id: int|str|None = None):
       tuple([str(id)] + list(key.values())))
     conn.commit()
     return True
-  except sqlite3.OperationalError:
+  except sqlite3.DatabaseError:
     return False
   finally:
     cur.close()
@@ -72,7 +72,7 @@ def diskcache_get(table: str, key: str|None, id: str|None = None) -> Any:
   try:
     if key is None:
       try: res = cur.execute(f"SELECT * FROM '{table}_{VERSION}'")
-      except sqlite3.OperationalError:  return {}
+      except sqlite3.DatabaseError:  return {}
       out = {}
       for row in res.fetchall():
           row_id, user_key, pickled_val = row[0], row[1], row[-1]
@@ -89,13 +89,13 @@ def diskcache_get(table: str, key: str|None, id: str|None = None) -> Any:
         res = cur.execute(f"SELECT val FROM '{table}_{VERSION}' WHERE key=? AND id=?", (key, str(id)))
         row = res.fetchone()
         return pickle.loads(row[0]) if row else None
-      except sqlite3.OperationalError:
+      except sqlite3.DatabaseError: # table not created yet (or a concurrent hiccup): behave as empty
           return {}
     else:
       try:
           res = cur.execute(f"SELECT id, val FROM '{table}_{VERSION}' WHERE key=?", (key,))
           rows = res.fetchall()
-      except sqlite3.OperationalError:
+      except sqlite3.DatabaseError: # table not created yet (or a concurrent hiccup): behave as empty
           return {}
       if not rows: 
         return {}
@@ -104,8 +104,13 @@ def diskcache_get(table: str, key: str|None, id: str|None = None) -> Any:
       return {row_id: pickle.loads(val) for row_id, val in rows}
   finally: cur.close()
 
+_db_lock = threading.RLock() # one sqlite connection is shared by the capture loop, motion threads and HTTP threads
+
 class db:
   def __init__(self): pass
-  def run_get(self, table, key=None, id=None): return diskcache_get(table=table, key=key, id=id)
-  def run_put(self, table, key, val=None, id=None, replace=True): return diskcache_put(table=table, key=key, id=id,  val=val, replace=replace)
-  def run_delete(self, table, key, id=None): return diskcache_delete(table=table, key=key, id=id)
+  def run_get(self, table, key=None, id=None):
+    with _db_lock: return diskcache_get(table=table, key=key, id=id)
+  def run_put(self, table, key, val=None, id=None, replace=True):
+    with _db_lock: return diskcache_put(table=table, key=key, id=id,  val=val, replace=replace)
+  def run_delete(self, table, key, id=None):
+    with _db_lock: return diskcache_delete(table=table, key=key, id=id)
