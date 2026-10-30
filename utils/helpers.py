@@ -5,6 +5,7 @@ import shutil
 from collections import deque, defaultdict
 import time
 import os
+import sys
 import subprocess
 import urllib
 import json
@@ -210,6 +211,39 @@ def find_ffmpeg():
         if os.path.exists(path):
             return path
     return 'ffmpeg'
+
+# local webcams, src format: webcam:<device>[@WIDTHxHEIGHT][@FPS]
+# <device> is the DirectShow name on Windows (e.g. "c922 Pro Stream Webcam"), /dev/videoN on Linux, the index on macOS
+WEBCAM_PREFIX = "webcam:"
+
+def is_webcam(src): return isinstance(src, str) and src.startswith(WEBCAM_PREFIX)
+
+def parse_webcam(src):
+    device, width, height, fps = src[len(WEBCAM_PREFIX):], 1920, 1080, 30
+    for part in reversed(device.split("@")[1:]):
+        if "x" in part and all(p.isdigit() for p in part.split("x", 1)): width, height = map(int, part.split("x", 1))
+        elif part.replace(".", "", 1).isdigit(): fps = float(part)
+        else: break
+        device = device[:-(len(part) + 1)]
+    return device.strip(), width, height, fps
+
+def webcam_input_args(src):
+    device, width, height, fps = parse_webcam(src)
+    size, rate = f"{width}x{height}", f"{fps:g}"
+    if os.name == "nt":
+        # mjpeg is needed for 1080p30 over USB, raw yuyv tops out at 5fps on most UVC cams
+        return ["-f", "dshow", "-rtbufsize", "256M", "-vcodec", "mjpeg", "-video_size", size, "-framerate", rate, "-i", f"video={device}"]
+    if sys.platform == "darwin":
+        return ["-f", "avfoundation", "-video_size", size, "-framerate", rate, "-i", device]
+    return ["-f", "v4l2", "-input_format", "mjpeg", "-video_size", size, "-framerate", rate, "-i", device]
+
+def list_webcams():
+    if os.name != "nt": return []
+    try:
+        out = subprocess.run([find_ffmpeg(), "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                             stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", timeout=10).stderr
+    except Exception: return []
+    return [line.split('"')[1] for line in out.splitlines() if line.rstrip().endswith("(video)") and line.count('"') >= 2]
 
 def upload_file(file_path: Path, session_token: str):
     if not file_path.exists():

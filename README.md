@@ -69,7 +69,7 @@ Try it out with this feed: https://webcam.elcat.kg/Too-Ashu_Tunnel_North/index.m
 https://x.com/RoryClear/status/1959249250811785405
 
 ## computer requirements
-- Mac, Linux, ~~Windows~~ *ffmpeg fix needed
+- Mac, Linux, Windows (ffmpeg 5.1 or newer)
 - ffmpeg
 - python3.11 or later
 
@@ -80,6 +80,13 @@ https://x.com/RoryClear/status/1959249250811785405
 4. (optional) enter your Clearcam premium userID in the web UI settings (viewable in iOS app settings page) to receive streams and notifications
 - use DEV=AMD / DEV=NV python3 clearcam.py if your CPU is being used instead of your GPU
 - use BEAM=2 python3 clearcam.py for extra performance (wait time on first run)
+
+## use a USB webcam (Windows, Linux, macOS)
+- `python clearcam.py --webcam` adds the first webcam it finds as a camera called "webcam" (Windows device listing only)
+- or pick one: `python clearcam.py --webcam="c922 Pro Stream Webcam@1920x1080@30"`
+- or add it in the web UI with the source `webcam:<device>[@WIDTHxHEIGHT][@FPS]`, defaults are 1920x1080 at 30fps
+- `<device>` is the DirectShow name on Windows (list them with `ffmpeg -list_devices true -f dshow -i dummy`), `/dev/video0` on Linux, the avfoundation index on macOS
+- webcam video is re-encoded to H.264 with libx264 (CRF 26, max 3 Mbit/s), so expect some CPU use
 
 ## Bring your own notifications!
 - You can now change the URL notifications are sent to in settings.

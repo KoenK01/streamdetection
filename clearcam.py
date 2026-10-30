@@ -1,3 +1,6 @@
+try: import truststore; truststore.inject_into_ssl() # use the OS cert store for model downloads (works behind TLS inspection)
+except ImportError: pass
+import utils.windows_compat
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import fetch
 from tinygrad.dtype import dtypes
@@ -26,6 +29,7 @@ import multiprocessing
 import re
 import base64
 from utils.helpers import send_notif, find_ffmpeg, export_clip, upload_file, encrypt_file, export_and_upload, jit_infer
+from utils.helpers import is_webcam, parse_webcam, webcam_input_args, list_webcams
 import pickle
 
 # RTSP URL
@@ -143,6 +147,7 @@ def draw_rectangle_numpy(img, pt1, pt2, color, thickness=1):
 def is_vod(cam_name): return Path("data/cameras", cam_name, "streams", "video").is_dir()
 
 def _get_stream_resolution(src):
+  if is_webcam(src): return parse_webcam(src)[1:3] # probing would grab the device, we already ask for a fixed size
   ffmpeg_path = find_ffmpeg()
   command = [ffmpeg_path, "-i", src]
   try:
@@ -309,20 +314,29 @@ class VideoCapture:
         "-hls_flags", "independent_segments",
         "-hls_segment_type", "fmp4",
         "-hls_fmp4_init_filename", "init.mp4",
-        "-hls_segment_filename", str(path / "seg_%06d.m4s"),
-        str(path / "stream.m3u8"),
+        "-hls_segment_filename", (path / "seg_%06d.m4s").as_posix(),
+        (path / "stream.m3u8").as_posix(),
       ]
       return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), None
         
     else:  # Live streams
       # Original live stream pipeline
+      if is_webcam(src):
+        # webcams give mjpeg/raw frames, not h264, so encode instead of copy. keyframe every 2s to match hls_time
+        fps = parse_webcam(src)[3]
+        input_args = webcam_input_args(src)
+        codec_args = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
+                      "-crf", "26", "-maxrate", "3M", "-bufsize", "6M", # ~30GB/day at 1080p instead of ~85GB
+                      "-g", str(int(fps * 2)), "-keyint_min", str(int(fps * 2)), "-sc_threshold", "0"]
+      else:
+        input_args = [*(["-rtsp_transport", "tcp"] if is_rtsp else []), "-i", src]
+        codec_args = ["-c", "copy"]
       command = [
           ffmpeg_path,
-          *(["-rtsp_transport", "tcp"] if is_rtsp else []),
           "-fflags", "+genpts",
           "-avoid_negative_ts", "make_zero",
-          "-i", src,
-          "-c", "copy",
+          *input_args,
+          *codec_args,
           "-an",
           "-f", "hls",
           "-hls_time", "2",
@@ -331,9 +345,9 @@ class VideoCapture:
           "-hls_segment_type", "fmp4",
           "-hls_fmp4_init_filename", "init.mp4",
           "-hls_flags", "append_list+independent_segments+temp_file",
-          "-hls_segment_filename", str(path / "stream_%06d.m4s"),
+          "-hls_segment_filename", (path / "stream_%06d.m4s").as_posix(),
           "-start_number", "0",
-          str(path / "stream.m3u8")
+          (path / "stream.m3u8").as_posix()
       ]
       hls_proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
       if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
@@ -341,7 +355,7 @@ class VideoCapture:
       command = [
           ffmpeg_path,
           "-live_start_index", "-1",
-          "-i", str(path / "stream.m3u8"),
+          "-i", (path / "stream.m3u8").as_posix(),
           "-loglevel", "quiet",
           "-reconnect", "1",
           "-reconnect_streamed", "1",
@@ -352,7 +366,7 @@ class VideoCapture:
           "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",
           "-timeout", "5000000",
           "-rw_timeout", "15000000",
-          "-vsync", "2",
+          "-fps_mode", "vfr", # -vsync was removed in newer ffmpeg
           "-fflags", "+discardcorrupt+fastseek+flush_packets+nobuffer",
           "-avioflags", "direct",
           "-flags", "low_delay",
@@ -1455,7 +1469,17 @@ if __name__ == "__main__":
 
   object_queue = []
   cam_name = next((arg.split("=", 1)[1] for arg in sys.argv[1:] if arg.startswith("--cam_name=")), "my_camera")
-  
+
+  # --webcam adds the first local webcam, --webcam="<device>[@WxH][@FPS]" a specific one
+  webcam_arg = next((arg for arg in sys.argv[1:] if arg == "--webcam" or arg.startswith("--webcam=")), None)
+  if webcam_arg is not None:
+    device = webcam_arg.split("=", 1)[1] if "=" in webcam_arg else next(iter(list_webcams()), None)
+    if device is None: print("no webcam found, pass one with --webcam=\"<device name>\"")
+    else:
+      webcam_name = next((arg.split("=", 1)[1] for arg in sys.argv[1:] if arg.startswith("--cam_name=")), "webcam")
+      database.run_put("links", webcam_name, f"webcam:{device}")
+      print(f"using webcam {device} as {webcam_name}")
+
   class_labels = fetch('https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names').read_text().split("\n")
   color_dict = {label: tuple((((i+1) * 50) % 256, ((i+1) * 100) % 256, ((i+1) * 150) % 256)) for i, label in enumerate(class_labels)}
   cam = None
