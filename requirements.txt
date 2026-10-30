@@ -2,3 +2,4 @@ git+https://github.com/tinygrad/tinygrad.git@ebe4623e93ec3814da5049c95d968de8bd3
 numpy==2.0.0
 opencv-python-headless==4.10.0.84
 truststore
+yt-dlp

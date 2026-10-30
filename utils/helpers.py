@@ -8,6 +8,7 @@ import os
 import sys
 import subprocess
 import urllib
+from urllib.parse import urlparse
 import json
 import struct
 from datetime import datetime
@@ -236,6 +237,32 @@ def webcam_input_args(src):
     if sys.platform == "darwin":
         return ["-f", "avfoundation", "-video_size", size, "-framerate", rate, "-i", device]
     return ["-f", "v4l2", "-input_format", "mjpeg", "-video_size", size, "-framerate", rate, "-i", device]
+
+# stream pages (YouTube, Twitch, ...) aren't media urls, yt-dlp turns them into an HLS url ffmpeg can read.
+# those urls expire after a few hours, so resolve on every (re)connect and only cache briefly
+PAGE_HOSTS = ("youtube.com", "youtu.be", "twitch.tv", "kick.com", "dailymotion.com", "vimeo.com")
+_resolved = {} # src -> (time, url)
+stream_info = {} # src -> {"title", "uploader", "is_live"}
+
+def is_page_url(src):
+    if not isinstance(src, str) or not src.startswith("http"): return False
+    host = urlparse(src).netloc.lower().split(":")[0]
+    return any(host == h or host.endswith("." + h) for h in PAGE_HOSTS)
+
+def resolve_stream(src, max_age=1800):
+    if not is_page_url(src): return src
+    if src in _resolved and time.time() - _resolved[src][0] < max_age: return _resolved[src][1]
+    try:
+        import yt_dlp
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True,
+                "format": "bv*[height<=1080][vcodec^=avc1]/bv*[height<=1080]/bv*/b"}
+        with yt_dlp.YoutubeDL(opts) as ydl: info = ydl.extract_info(src, download=False)
+    except Exception as e:
+        print(f"could not resolve {src}: {e}")
+        return src
+    stream_info[src] = {"title": info.get("title"), "uploader": info.get("uploader"), "is_live": info.get("is_live")}
+    _resolved[src] = (time.time(), info["url"])
+    return info["url"]
 
 def list_webcams():
     if os.name != "nt": return []

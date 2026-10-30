@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clearcam live</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%233ee6c4' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%233ee6c4'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #07090d;
+    --panel: #0e1218;
+    --panel-2: #131922;
+    --line: rgba(255, 255, 255, 0.07);
+    --line-2: rgba(255, 255, 255, 0.12);
+    --text: #e8edf4;
+    --muted: #8a95a6;
+    --faint: #5b6575;
+    --accent: #3ee6c4;
+    --accent-ink: #04241d;
+    --live: #ff4d5e;
+    --warn: #ffb547;
+    --radius: 14px;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 500px at 15% -10%, rgba(62, 230, 196, 0.08), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(110, 120, 255, 0.07), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  /* header */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 24px;
+    padding: 14px 24px;
+    background: rgba(7, 9, 13, 0.72);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; font-size: 16px; white-space: nowrap; }
+  .brand svg { width: 26px; height: 26px; }
+  .brand small { font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 2px; }
+  .stats { display: flex; gap: 8px; margin-left: auto; }
+  .stat {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 14px; min-width: 104px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .stat b { font: 600 18px/1.2 var(--mono); letter-spacing: -0.02em; }
+  .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line-2);
+    background: var(--panel-2); transition: background .15s, border-color .15s, transform .1s;
+  }
+  .btn:hover { background: #1a212c; border-color: rgba(255,255,255,.2); }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+  .btn.primary:hover { background: #63f0d4; }
+  .btn svg { width: 16px; height: 16px; }
+
+  /* layout */
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; padding: 20px 24px 32px; }
+  .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar h2 { margin: 0 8px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px; font-size: 12px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+    transition: all .15s;
+  }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .chip.on { color: var(--text); border-color: var(--line-2); background: var(--panel-2); }
+  .chip:not(.on) i { opacity: .35; }
+  .slider { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); font-size: 12px; }
+  .slider input { accent-color: var(--accent); width: 110px; }
+  .slider b { font: 600 12px var(--mono); color: var(--text); min-width: 34px; }
+
+  /* stream grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; }
+  .grid.focus { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .grid.focus .tile.focused { grid-column: 1 / -1; order: -1; }
+  .tile {
+    position: relative; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    aspect-ratio: 16 / 9;
+    box-shadow: 0 20px 40px -24px rgba(0,0,0,.8);
+    animation: rise .35s ease both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.99); } }
+  .tile canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .tile .shade {
+    position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(0,0,0,.55) 0%, transparent 22%, transparent 62%, rgba(0,0,0,.75) 100%);
+  }
+  .tile .top, .tile .bottom { position: absolute; left: 14px; right: 14px; display: flex; align-items: center; gap: 8px; }
+  .tile .top { top: 12px; }
+  .tile .bottom { bottom: 12px; align-items: flex-end; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    background: rgba(8, 10, 14, .62); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.08);
+    white-space: nowrap;
+  }
+  .pill.live { color: #fff; }
+  .pill.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 0 rgba(255,77,94,.7); animation: pulse 1.6s infinite; }
+  .pill.wait { color: var(--warn); }
+  .pill.wait::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); opacity: .9; }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(255,77,94,0); } 100% { box-shadow: 0 0 0 0 rgba(255,77,94,0); } }
+  .mono { font-family: var(--mono); }
+  .tile .name { font-weight: 600; font-size: 14px; text-shadow: 0 1px 8px rgba(0,0,0,.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .spacer { flex: 1; }
+  .tile .meta { min-width: 0; flex: 1; }
+  .tile .title { font-size: 12px; color: rgba(255,255,255,.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+  .tile .counts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .count { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 7px; font-size: 12px; background: rgba(8,10,14,.62); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.08); }
+  .count i { width: 7px; height: 7px; border-radius: 2px; }
+  .count b { font-family: var(--mono); font-weight: 600; }
+  .actions { display: flex; gap: 6px; opacity: 0; transform: translateY(-4px); transition: all .18s; }
+  .tile:hover .actions, .tile:focus-within .actions { opacity: 1; transform: none; }
+  .icon-btn {
+    width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px;
+    background: rgba(8,10,14,.62); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.1);
+  }
+  .icon-btn:hover { background: rgba(30,36,46,.9); }
+  .icon-btn.danger:hover { background: rgba(255,77,94,.25); border-color: rgba(255,77,94,.5); }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .connecting {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 13px;
+    background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.04) 50%, transparent 70%) 0 0 / 200% 100%, var(--panel);
+    animation: shimmer 1.8s linear infinite;
+  }
+  .connecting .ring { width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 50%; border: 2px solid rgba(62,230,196,.2); border-top-color: var(--accent); animation: spin .9s linear infinite; }
+  @keyframes shimmer { to { background-position: -200% 0, 0 0; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty {
+    grid-column: 1 / -1; display: grid; place-items: center; text-align: center;
+    padding: 80px 20px; border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--muted);
+  }
+  .empty h3 { color: var(--text); margin: 14px 0 6px; font-size: 18px; }
+  .empty p { margin: 0 0 18px; max-width: 420px; }
+
+  /* sidebar */
+  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .card-h { display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px; }
+  .card-h h3 { margin: 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .card-h .spacer { flex: 1; }
+  .card-h small { color: var(--faint); font-size: 12px; }
+  .feed { list-style: none; margin: 0; padding: 0 8px 8px; max-height: calc(100vh - 420px); min-height: 220px; overflow: auto; }
+  .feed li {
+    display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center;
+    padding: 8px; border-radius: 10px; animation: slidein .3s ease both;
+  }
+  .feed li:hover { background: var(--panel-2); }
+  @keyframes slidein { from { opacity: 0; transform: translateX(10px); } }
+  .thumb { width: 52px; height: 52px; border-radius: 9px; object-fit: cover; background: var(--panel-2); border: 1px solid var(--line); }
+  .feed .what { font-weight: 600; text-transform: capitalize; display: flex; align-items: center; gap: 7px; }
+  .feed .what i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  .feed .where { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .feed .when { font: 500 11px var(--mono); color: var(--faint); text-align: right; }
+  .feed .empty-feed { display: block; padding: 30px 12px; text-align: center; color: var(--faint); }
+  .bars { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .bar { display: grid; grid-template-columns: 84px 1fr 40px; gap: 10px; align-items: center; font-size: 12px; }
+  .bar span { text-transform: capitalize; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar .track { height: 8px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 99px; transition: width .5s ease; }
+  .bar b { font: 600 12px var(--mono); text-align: right; }
+
+  /* modal */
+  dialog {
+    width: min(520px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line-2); border-radius: 18px;
+    background: var(--panel); color: var(--text); box-shadow: 0 40px 80px -20px rgba(0,0,0,.8);
+  }
+  dialog::backdrop { background: rgba(3,5,8,.6); backdrop-filter: blur(4px); }
+  dialog[open] { animation: rise .25s ease; }
+  .modal-b { padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-b h3 { margin: 0; font-size: 18px; }
+  .modal-b p { margin: 0; color: var(--muted); font-size: 13px; }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 500; }
+  input[type=text], input[type=url] {
+    padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--bg); outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=text]:focus, input[type=url]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(62,230,196,.15); }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .presets button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); font-size: 12px; }
+  .presets button:hover { border-color: var(--accent); }
+  .sources { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--faint); }
+  .sources span { padding: 2px 7px; border-radius: 6px; background: var(--panel-2); }
+  .modal-f { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--line); }
+  .error { color: var(--live); font-size: 13px; min-height: 1em; }
+
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 20px); opacity: 0;
+    padding: 10px 16px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line-2);
+    transition: all .25s; z-index: 50; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+    .feed { max-height: 420px; }
+    .grid.focus { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    header { flex-wrap: wrap; padding: 12px 16px; gap: 12px; }
+    .stats { order: 3; width: 100%; overflow-x: auto; margin-left: 0; }
+    .stat { min-width: 92px; }
+    #addBtn { margin-left: auto; }
+    main { padding: 16px; }
+    .grid { grid-template-columns: 1fr; }
+    .grid.focus { grid-template-columns: 1fr; }
+    .slider { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="#3ee6c4" stroke-width="2.5"/><circle cx="16" cy="16" r="5.5" fill="#3ee6c4"/><circle cx="18" cy="14" r="1.6" fill="#07090d"/></svg>
+    clearcam <small>live detection</small>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="sLive">0/0</b><span>Streams live</span></div>
+    <div class="stat"><b id="sView">0</b><span>In view now</span></div>
+    <div class="stat"><b id="sTotal">0</b><span>Objects seen</span></div>
+    <div class="stat"><b id="sFps">0</b><span>Detector fps</span></div>
+  </div>
+  <button class="btn primary" id="addBtn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    Add stream
+  </button>
+</header>
+
+<main>
+  <section>
+    <div class="toolbar">
+      <h2>Streams</h2>
+      <div class="chips" id="classChips"></div>
+      <div class="slider">Min confidence <input type="range" id="conf" min="0" max="95" step="5" value="40"><b id="confVal">40%</b></div>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <div class="card-h"><h3>Activity</h3><span class="spacer"></span><small id="feedCount"></small></div>
+      <ul class="feed" id="feed"><li class="empty-feed">New objects show up here as they enter a stream.</li></ul>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Seen this session</h3></div>
+      <div class="bars" id="bars"><div class="bar"><span>nothing yet</span></div></div>
+    </div>
+  </aside>
+</main>
+
+<dialog id="addDialog">
+  <form method="dialog" id="addForm">
+    <div class="modal-b">
+      <h3>Add a stream</h3>
+      <p>Paste a live stream link. Detection starts as soon as the first frames come in.</p>
+      <label>Name <input type="text" name="name" id="fName" placeholder="Erasmusbrug" maxlength="40" required autocomplete="off"></label>
+      <label>Stream URL <input type="text" name="url" id="fUrl" placeholder="https://www.youtube.com/live/..." required autocomplete="off"></label>
+      <div class="sources"><span>YouTube live</span><span>Twitch</span><span>RTSP</span><span>HLS .m3u8</span><span>webcam:&lt;device&gt;</span></div>
+      <div class="presets" id="presets">
+        <button type="button" data-name="Erasmusbrug" data-url="https://www.youtube.com/live/gsViKzj7nuQ">Erasmusbrug, Rotterdam</button>
+        <button type="button" data-name="Too-Ashu tunnel" data-url="https://webcam.elcat.kg/Too-Ashu_Tunnel_North/index.m3u8">Too-Ashu tunnel, Kyrgyzstan</button>
+        <button type="button" data-name="Webcam" data-url="webcam:c922 Pro Stream Webcam">My webcam</button>
+      </div>
+      <div class="error" id="formError"></div>
+    </div>
+    <div class="modal-f">
+      <button type="button" class="btn" id="cancelBtn">Cancel</button>
+      <button type="submit" class="btn primary" id="submitBtn">Start detecting</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const PALETTE = { person: "#3ee6c4", car: "#6e8bff", truck: "#a78bfa", bus: "#f472b6", bicycle: "#facc15",
+  motorcycle: "#fb923c", boat: "#38bdf8", bird: "#a3e635", dog: "#f87171", cat: "#fbbf24", "traffic light": "#94a3b8" };
+const colorFor = (label) => {
+  if (PALETTE[label]) return PALETTE[label];
+  let h = 0; for (const c of label) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return `hsl(${h} 80% 65%)`;
+};
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const cleanTitle = (t) => (t || "").replace(/\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, "");
+const sourceLabel = (src) => {
+  if (src.startsWith("webcam:")) return `Webcam · ${src.slice(7).split("@")[0]}`;
+  try { const u = new URL(src); return `${u.protocol.startsWith("rtsp") ? "RTSP" : u.pathname.endsWith(".m3u8") ? "HLS" : "Stream"} · ${u.hostname}`; } catch { return src; }
+};
+const ago = (ts) => { const s = Math.max(0, Date.now() / 1000 - ts); return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : `${(s / 3600) | 0}h`; };
+
+const state = { streams: [], tiles: new Map(), hidden: new Set(), seenLabels: new Set(), minConf: 0.4, focused: null, events: [], lastEventTs: 0 };
+try { state.hidden = new Set(JSON.parse(localStorage.getItem("cc_hidden") || "[]")); } catch {}
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+const ICONS = {
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>',
+  shrink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>',
+  boxes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>',
+};
+
+function makeTile(s) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  el.innerHTML = `
+    <canvas></canvas>
+    <div class="connecting"><div><div class="ring"></div>Connecting to stream</div></div>
+    <div class="shade"></div>
+    <div class="top">
+      <span class="pill wait">Connecting</span>
+      <span class="name"></span>
+      <span class="spacer"></span>
+      <div class="actions">
+        <button class="icon-btn" data-act="boxes" title="Toggle boxes" aria-label="Toggle boxes">${ICONS.boxes}</button>
+        <button class="icon-btn" data-act="focus" title="Focus" aria-label="Focus">${ICONS.expand}</button>
+        <button class="icon-btn danger" data-act="delete" title="Remove stream" aria-label="Remove stream">${ICONS.trash}</button>
+      </div>
+      <span class="pill mono fps">0 fps</span>
+    </div>
+    <div class="bottom"><div class="meta"><div class="title"></div><div class="counts"></div></div></div>`;
+  const tile = { name: s.name, el, canvas: el.querySelector("canvas"), ctx: el.querySelector("canvas").getContext("2d"),
+    seq: -1, bitmap: null, live: null, showBoxes: true, alive: true };
+  el.querySelector(".name").textContent = s.name;
+  el.querySelector(".actions").addEventListener("click", (e) => {
+    const act = e.target.closest("button")?.dataset.act;
+    if (act === "boxes") { tile.showBoxes = !tile.showBoxes; draw(tile); }
+    if (act === "focus") setFocus(state.focused === s.name ? null : s.name);
+    if (act === "delete") removeStream(s.name);
+  });
+  el.addEventListener("dblclick", () => setFocus(state.focused === s.name ? null : s.name));
+  new ResizeObserver(() => draw(tile)).observe(el);
+  pump(tile);
+  return tile;
+}
+
+// fetch frames one at a time, each JPEG carries the detections for exactly that frame
+async function pump(tile) {
+  while (tile.alive) {
+    try {
+      const r = await fetch(`/api/frame?cam=${encodeURIComponent(tile.name)}&after=${tile.seq}`, { cache: "no-store" });
+      if (r.status === 200) {
+        const live = JSON.parse(r.headers.get("X-Live"));
+        const bmp = await createImageBitmap(await r.blob());
+        tile.bitmap?.close?.();
+        Object.assign(tile, { bitmap: bmp, live, seq: live.seq });
+        draw(tile);
+      } else await sleep(r.status === 204 ? 25 : 1000);
+    } catch { await sleep(1000); }
+    if (document.hidden) await sleep(500);
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function draw(tile) {
+  const { canvas, ctx, bitmap, live } = tile;
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.round(canvas.clientWidth * dpr), H = Math.round(canvas.clientHeight * dpr);
+  if (!W || !H) return;
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  ctx.fillStyle = "#0b0e13"; ctx.fillRect(0, 0, W, H);
+  if (!bitmap) return;
+  // cover-fit the frame into the tile
+  const scale = Math.max(W / bitmap.width, H / bitmap.height);
+  const dw = bitmap.width * scale, dh = bitmap.height * scale, ox = (W - dw) / 2, oy = (H - dh) / 2;
+  ctx.drawImage(bitmap, ox, oy, dw, dh);
+  const counts = {};
+  const dets = (live?.dets || []).filter((d) => d.score >= state.minConf);
+  for (const d of dets) {
+    state.seenLabels.add(d.label);
+    if (state.hidden.has(d.label)) continue;
+    counts[d.label] = (counts[d.label] || 0) + 1;
+    if (!tile.showBoxes) continue;
+    const sx = dw / live.w, sy = dh / live.h;
+    const x1 = ox + d.box[0] * sx, y1 = oy + d.box[1] * sy, x2 = ox + d.box[2] * sx, y2 = oy + d.box[3] * sy;
+    drawBox(ctx, x1, y1, x2, y2, colorFor(d.label), `${d.label} ${Math.round(d.score * 100)}%`, dpr);
+  }
+  renderCounts(tile, counts);
+}
+
+function drawBox(ctx, x1, y1, x2, y2, color, text, dpr) {
+  const w = x2 - x1, h = y2 - y1, c = Math.min(18 * dpr, w / 3, h / 3);
+  ctx.save();
+  ctx.fillStyle = color; ctx.globalAlpha = 0.08; ctx.fillRect(x1, y1, w, h);
+  ctx.globalAlpha = 0.45; ctx.strokeStyle = color; ctx.lineWidth = 1 * dpr; ctx.strokeRect(x1, y1, w, h);
+  // corner brackets
+  ctx.globalAlpha = 1; ctx.lineWidth = 2.5 * dpr; ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x1, y1 + c); ctx.lineTo(x1, y1); ctx.lineTo(x1 + c, y1);
+  ctx.moveTo(x2 - c, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + c);
+  ctx.moveTo(x2, y2 - c); ctx.lineTo(x2, y2); ctx.lineTo(x2 - c, y2);
+  ctx.moveTo(x1 + c, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - c);
+  ctx.stroke();
+  if (w > 26 * dpr) {
+    ctx.font = `600 ${11 * dpr}px Inter, system-ui, sans-serif`;
+    const tw = ctx.measureText(text).width, ph = 18 * dpr, px = 6 * dpr;
+    const ly = y1 - ph - 3 * dpr < 0 ? y1 + 3 * dpr : y1 - ph - 3 * dpr;
+    ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x1, ly, tw + px * 2, ph, 5 * dpr); ctx.fill();
+    ctx.fillStyle = "#06090d"; ctx.textBaseline = "middle"; ctx.fillText(text, x1 + px, ly + ph / 2 + 0.5 * dpr);
+  }
+  ctx.restore();
+}
+
+function renderCounts(tile, counts) {
+  const key = JSON.stringify(counts);
+  if (tile.countsKey === key) return;
+  tile.countsKey = key;
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  tile.el.querySelector(".counts").innerHTML = entries.length
+    ? entries.map(([l, n]) => `<span class="count"><i style="background:${colorFor(l)}"></i>${esc(l)} <b>${n}</b></span>`).join("")
+    : `<span class="count" style="color:var(--muted)">nothing in view</span>`;
+}
+
+function setFocus(name) {
+  state.focused = name;
+  $("#grid").classList.toggle("focus", !!name);
+  for (const [n, t] of state.tiles) {
+    t.el.classList.toggle("focused", n === name);
+    t.el.querySelector('[data-act="focus"]').innerHTML = n === name ? ICONS.shrink : ICONS.expand;
+  }
+}
+
+async function removeStream(name) {
+  if (!confirm(`Remove "${name}" and its recordings?`)) return;
+  await fetch(`/delete_camera?cam_name=${encodeURIComponent(name)}`);
+  if (state.focused === name) setFocus(null);
+  toast(`Removed ${name}`);
+  refreshStreams();
+}
+
+async function refreshStreams() {
+  let streams;
+  try { streams = await (await fetch("/api/streams", { cache: "no-store" })).json(); } catch { return; }
+  state.streams = streams;
+  const grid = $("#grid");
+  const names = new Set(streams.map((s) => s.name));
+  for (const [n, t] of state.tiles) if (!names.has(n)) { t.alive = false; t.el.remove(); state.tiles.delete(n); }
+  for (const s of streams) {
+    let t = state.tiles.get(s.name);
+    if (!t) { t = makeTile(s); state.tiles.set(s.name, t); grid.appendChild(t.el); }
+    const live = s.status === "live";
+    const pill = t.el.querySelector(".pill");
+    pill.className = `pill ${live ? "live" : "wait"}`;
+    pill.textContent = live ? "LIVE" : "Connecting";
+    t.el.querySelector(".connecting").style.display = t.bitmap ? "none" : "";
+    t.el.querySelector(".fps").textContent = `${live ? s.fps.toFixed(0) : 0} fps`;
+    t.el.querySelector(".title").textContent = cleanTitle(s.title) || sourceLabel(s.src);
+  }
+  let empty = grid.querySelector(".empty");
+  if (!streams.length && !empty) {
+    grid.insertAdjacentHTML("beforeend", `<div class="empty"><div>
+      <svg width="54" height="54" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="#3ee6c4" stroke-width="1.5" stroke-dasharray="3 3"/><circle cx="16" cy="16" r="5" fill="none" stroke="#3ee6c4" stroke-width="1.5"/></svg>
+      <h3>No streams yet</h3><p>Paste a YouTube live link, an RTSP camera or an HLS feed and clearcam starts detecting people, cars and more.</p>
+      <button class="btn primary" onclick="openAdd()">Add your first stream</button></div></div>`);
+  } else if (streams.length && empty) empty.remove();
+
+  const liveN = streams.filter((s) => s.status === "live");
+  $("#sLive").textContent = `${liveN.length}/${streams.length}`;
+  $("#sView").textContent = streams.reduce((a, s) => a + s.in_view, 0);
+  const totals = {};
+  for (const s of streams) for (const [l, n] of Object.entries(s.totals)) totals[l] = (totals[l] || 0) + n;
+  $("#sTotal").textContent = Object.values(totals).reduce((a, b) => a + b, 0);
+  $("#sFps").textContent = liveN.length ? (liveN.reduce((a, s) => a + s.fps, 0) / liveN.length).toFixed(1) : "0";
+  renderBars(totals);
+  renderChips();
+}
+
+function renderBars(totals) {
+  const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const max = entries[0]?.[1] || 1;
+  $("#bars").innerHTML = entries.length ? entries.map(([l, n]) => `
+    <div class="bar"><span>${esc(l)}</span><div class="track"><div class="fill" style="width:${(n / max) * 100}%;background:${colorFor(l)}"></div></div><b>${n}</b></div>`).join("")
+    : `<div class="bar"><span>nothing yet</span></div>`;
+}
+
+function renderChips() {
+  const labels = [...state.seenLabels].sort();
+  const key = labels.join("|") + "#" + [...state.hidden].join("|");
+  if (renderChips.key === key) return;
+  renderChips.key = key;
+  $("#classChips").innerHTML = labels.map((l) =>
+    `<button class="chip ${state.hidden.has(l) ? "" : "on"}" data-label="${esc(l)}" style="color:${state.hidden.has(l) ? "" : colorFor(l)}"><i></i><span style="color:var(--text)">${esc(l)}</span></button>`).join("");
+}
+$("#classChips").addEventListener("click", (e) => {
+  const l = e.target.closest(".chip")?.dataset.label;
+  if (!l) return;
+  state.hidden.has(l) ? state.hidden.delete(l) : state.hidden.add(l);
+  try { localStorage.setItem("cc_hidden", JSON.stringify([...state.hidden])); } catch {}
+  renderChips(); state.tiles.forEach(draw);
+});
+$("#conf").addEventListener("input", (e) => {
+  state.minConf = e.target.value / 100; $("#confVal").textContent = `${e.target.value}%`; state.tiles.forEach(draw);
+});
+
+async function refreshEvents() {
+  let events;
+  try { events = await (await fetch(`/api/events?since=${state.lastEventTs}`, { cache: "no-store" })).json(); } catch { return; }
+  if (events.length) {
+    state.lastEventTs = events[0].ts;
+    state.events = [...events, ...state.events].slice(0, 100);
+    events.forEach((e) => state.seenLabels.add(e.label));
+    renderChips();
+  }
+  const feed = $("#feed");
+  const shown = state.events.filter((e) => !state.hidden.has(e.label) && e.score >= state.minConf);
+  $("#feedCount").textContent = shown.length ? `${shown.length} recent` : "";
+  if (!shown.length) { feed.innerHTML = `<li class="empty-feed">New objects show up here as they enter a stream.</li>`; return; }
+  const fresh = new Set(events.map((e) => `${e.cam}:${e.id}`));
+  feed.innerHTML = shown.map((e) => `
+    <li style="${fresh.has(`${e.cam}:${e.id}`) ? "" : "animation:none"}">
+      ${e.has_thumb ? `<img class="thumb" loading="lazy" src="/api/event_thumb?cam=${encodeURIComponent(e.cam)}&id=${e.id}" alt="">` : `<div class="thumb"></div>`}
+      <div style="min-width:0"><div class="what"><i style="background:${colorFor(e.label)}"></i>${esc(e.label)}</div>
+      <div class="where">${esc(e.cam)} · ${Math.round(e.score * 100)}% · #${e.id}</div></div>
+      <div class="when" data-ts="${e.ts}">${ago(e.ts)}</div>
+    </li>`).join("");
+}
+
+// add stream dialog
+const dlg = $("#addDialog");
+function openAdd() { $("#formError").textContent = ""; dlg.showModal(); $("#fName").focus(); }
+$("#addBtn").addEventListener("click", openAdd);
+$("#cancelBtn").addEventListener("click", () => dlg.close());
+$("#presets").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  $("#fName").value = b.dataset.name; $("#fUrl").value = b.dataset.url;
+});
+$("#addForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#submitBtn"); btn.disabled = true;
+  try {
+    const r = await fetch("/api/streams", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("#fName").value, url: $("#fUrl").value }) });
+    const body = await r.json();
+    if (!r.ok) { $("#formError").textContent = body.error || "Could not add stream"; return; }
+    dlg.close(); e.target.reset();
+    toast(`Added ${body.name}, connecting...`);
+    refreshStreams();
+  } finally { btn.disabled = false; }
+});
+
+refreshStreams(); refreshEvents();
+setInterval(refreshStreams, 2000);
+setInterval(refreshEvents, 1500);
+setInterval(() => document.querySelectorAll(".when[data-ts]").forEach((el) => el.textContent = ago(+el.dataset.ts)), 5000);
+</script>
+</body>
+</html>

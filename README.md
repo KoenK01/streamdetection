@@ -81,6 +81,13 @@ https://x.com/RoryClear/status/1959249250811785405
 - use DEV=AMD / DEV=NV python3 clearcam.py if your CPU is being used instead of your GPU
 - use BEAM=2 python3 clearcam.py for extra performance (wait time on first run)
 
+## live dashboard (this fork)
+- `python clearcam.py`, then open localhost:8080 for the dashboard (the original UI moved to localhost:8080/classic)
+- click "Add stream" and paste a YouTube live link, a Twitch channel, an RTSP camera, an HLS `.m3u8` feed or `webcam:<device>`
+- YouTube and Twitch pages are resolved to their HLS feed with yt-dlp, re-resolved on every reconnect since those links expire
+- each tile shows the exact frame the detector processed with its boxes, the sidebar lists new objects with a crop
+- filter classes and minimum confidence from the toolbar, double click a tile to focus it
+
 ## use a USB webcam (Windows, Linux, macOS)
 - `python clearcam.py --webcam` adds the first webcam it finds as a camera called "webcam" (Windows device listing only)
 - or pick one: `python clearcam.py --webcam="c922 Pro Stream Webcam@1920x1080@30"`

@@ -29,8 +29,9 @@ import multiprocessing
 import re
 import base64
 from utils.helpers import send_notif, find_ffmpeg, export_clip, upload_file, encrypt_file, export_and_upload, jit_infer
-from utils.helpers import is_webcam, parse_webcam, webcam_input_args, list_webcams
+from utils.helpers import is_webcam, parse_webcam, webcam_input_args, list_webcams, resolve_stream, stream_info
 import pickle
+import contextlib
 
 # RTSP URL
 # Video capture thread
@@ -46,6 +47,7 @@ from utils.helpers import BASE_DIR
 from ocsort_tracker import ocsort
 
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
+DETECT_FPS = 20 # frames per second handed to the detector, the recording keeps the full rate
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
 
 class RollingClassCounter:
@@ -148,6 +150,7 @@ def is_vod(cam_name): return Path("data/cameras", cam_name, "streams", "video").
 
 def _get_stream_resolution(src):
   if is_webcam(src): return parse_webcam(src)[1:3] # probing would grab the device, we already ask for a fixed size
+  src = resolve_stream(src)
   ffmpeg_path = find_ffmpeg()
   command = [ffmpeg_path, "-i", src]
   try:
@@ -206,6 +209,11 @@ class VideoCapture:
     self.alert_counters = {}
     self.live_link = {}
     self.live_link_lock = {}
+    # dashboard state: latest processed frame + all tracked objects, and first sightings of each track
+    self.live = {}
+    self.events = {}
+    self.totals = {}
+    self.seen = {}
 
     #self.last_shapes_time = time.time()
     #self.det_shapes = []
@@ -247,6 +255,10 @@ class VideoCapture:
     self.current_stream_dir_raw[cam_name] = self._get_new_stream_dir(cam_name)
     self.filename[cam_name] = None
     self.live_link_lock[cam_name] = threading.Lock()
+    self.live[cam_name] = None
+    self.events[cam_name] = deque(maxlen=60)
+    self.totals[cam_name] = defaultdict(int)
+    self.seen[cam_name] = set()
     alerts_on[cam_name] = True
 
   def start(self):
@@ -271,8 +283,11 @@ class VideoCapture:
               self.src[cam_name] = new_cams[cam_name]
               self.hls_proc[cam_name], self.proc[cam_name] = self._open_ffmpeg(cam_name)
         cams = new_cams
+      # nap when no live camera has a new frame, a busy loop here starves frame_loop of the GIL
+      # (Windows pipes deliver a frame in thousands of small reads) and detection drops below 1fps
+      if not any(self.vod[c] or self.frame_num.get(c) != self.last_frame_num.get(c) for c in cams.keys()): time.sleep(0.005)
       for cam_name in cams.keys():
-        if self.vod[cam_name]: self.process_frame_vod(cam_name=cam_name) 
+        if self.vod[cam_name]: self.process_frame_vod(cam_name=cam_name)
         else: self.process_frame(cam_name=cam_name)
       process_queue()
       if len(object_queue) > 0:
@@ -298,6 +313,7 @@ class VideoCapture:
     if cam_name in self.hls_proc and self.hls_proc[cam_name]: self.hls_proc[cam_name].kill()
     src = self.src[cam_name]
     if type(src) != str: return # todo, fixes a crash, fix cause
+    if not self.vod[cam_name]: src = resolve_stream(src)
 
     ffmpeg_path = find_ffmpeg()
     
@@ -331,11 +347,15 @@ class VideoCapture:
       else:
         input_args = [*(["-rtsp_transport", "tcp"] if is_rtsp else []), "-i", src]
         codec_args = ["-c", "copy"]
+      # one ffmpeg per stream: output 1 records HLS, output 2 pipes raw frames to the detector.
+      # reading the playlist back with a second ffmpeg stalls on Windows, the open playlist blocks ffmpeg's rename
       command = [
           ffmpeg_path,
+          "-loglevel", "quiet",
           "-fflags", "+genpts",
           "-avoid_negative_ts", "make_zero",
           *input_args,
+          "-map", "0:v:0",
           *codec_args,
           "-an",
           "-f", "hls",
@@ -347,34 +367,17 @@ class VideoCapture:
           "-hls_flags", "append_list+independent_segments+temp_file",
           "-hls_segment_filename", (path / "stream_%06d.m4s").as_posix(),
           "-start_number", "0",
-          (path / "stream.m3u8").as_posix()
-      ]
-      hls_proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-      if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
-      
-      command = [
-          ffmpeg_path,
-          "-live_start_index", "-1",
-          "-i", (path / "stream.m3u8").as_posix(),
-          "-loglevel", "quiet",
-          "-reconnect", "1",
-          "-reconnect_streamed", "1",
-          "-reconnect_delay_max", "2",
+          (path / "stream.m3u8").as_posix(),
+          "-map", "0:v:0",
           "-an",
           "-f", "rawvideo",
           "-pix_fmt", "bgr24",
-          "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",
-          "-timeout", "5000000",
-          "-rw_timeout", "15000000",
-          "-fps_mode", "vfr", # -vsync was removed in newer ffmpeg
-          "-fflags", "+discardcorrupt+fastseek+flush_packets+nobuffer",
-          "-avioflags", "direct",
-          "-flags", "low_delay",
-          "-max_delay", "100000",
-          "-threads", "1",
+          "-vf", f"fps={DETECT_FPS},scale={self.width[cam_name]}:{self.height[cam_name]}",
           "-"
       ]
-      return hls_proc, subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+      proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+      if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
+      return proc, proc
 
   def save_object(self, p, ts=0, cam_name=None):
     p = np.array([p.tlwh[0],p.tlwh[1],(p.tlwh[0]+p.tlwh[2]),(p.tlwh[1]+p.tlwh[3]),p.score,p.class_id,p.track_id])
@@ -407,7 +410,8 @@ class VideoCapture:
   def frame_loop(self, cam_name):
     fail_count = 0
     frame_size = self.width[cam_name] * self.height[cam_name] * 3
-    while (BASE_DIR / "cameras" / cam_name).exists():
+    if self.vod[cam_name]: return # files are read with cv2 in process_frame_vod
+    while self.running[cam_name] and (BASE_DIR / "cameras" / cam_name).exists():
       try:
         raw_bytes = self.proc[cam_name].stdout.read(frame_size)
         if len(raw_bytes) != frame_size:
@@ -447,8 +451,8 @@ class VideoCapture:
     frame_num = self.frame_num[cam_name]
     last_frame_num = self.last_frame_num[cam_name]
     if self.raw_frame[cam_name] is None: return
+    if frame_num == last_frame_num: return # check before copying, this runs in a tight loop
     frame = self.raw_frame[cam_name].copy()
-    if frame_num == last_frame_num: return
 
     # don't run inference when no active scheds
     if not any(counter.is_active() for _, counter in self.alert_counters[cam_name].items()): self.last_preds[cam_name] = [] # to remove annotation when no alerts active
@@ -579,12 +583,38 @@ class VideoCapture:
     shutil.rmtree(BASE_DIR / "cameras" / cam_name / "faces", ignore_errors=True)
     shutil.rmtree(BASE_DIR / "cameras" / cam_name / "event_images", ignore_errors=True)
 
+  def update_live(self, cam_name, frame, targets):
+    prev, now = self.live[cam_name], time.time()
+    fps = prev["fps"] if prev else 0
+    if prev and now > prev["ts"]: fps = 0.8 * fps + 0.2 / (now - prev["ts"]) if fps else 1 / (now - prev["ts"])
+    dets = []
+    for x in targets:
+      x1, y1, w, h = map(float, x.tlwh)
+      label = class_labels[int(x.class_id)]
+      dets.append({"box": [x1, y1, x1 + w, y1 + h], "score": round(float(x.score), 3), "label": label, "id": int(x.track_id)})
+      if x.tracklet_len >= 3 and int(x.track_id) not in self.seen[cam_name]: # 3 frames in a row, skips most flicker
+        self.seen[cam_name].add(int(x.track_id))
+        self.totals[cam_name][label] += 1
+        H, W = frame.shape[:2]
+        pad = 0.15 * max(w, h)
+        crop = frame[max(0, int(y1 - pad)):min(H, int(y1 + h + pad)), max(0, int(x1 - pad)):min(W, int(x1 + w + pad))]
+        thumb = None
+        if crop.size:
+          scale = 160 / max(crop.shape[:2])
+          if scale < 1: crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+          thumb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+        self.events[cam_name].append({"cam": cam_name, "ts": now, "label": label, "score": round(float(x.score), 3), "id": int(x.track_id), "thumb": thumb})
+    self.live[cam_name] = {"seq": (prev["seq"] + 1) if prev else 0, "ts": now, "fps": fps, "frame": frame, "jpeg": None,
+                           "w": frame.shape[1], "h": frame.shape[0], "dets": dets}
+
   def run_inference(self, frame, cam_name):
     global model
+    raw = frame
     frame = Tensor(frame)
     preds = jit_infer(model, frame, yolo_jit_cache).numpy()
     thresh = (self.settings[cam_name].get("threshold") if self.settings[cam_name] else 0.5) or 0.5 #todo clean!
     online_targets = self.tracker[cam_name].update(preds, thresh)
+    self.update_live(cam_name, raw, online_targets)
     online_targets = [p for p in online_targets if (classes is None or str(int(p.class_id)) in classes)]
     preds = []
     for x in online_targets:
@@ -932,6 +962,15 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 return
             
             try:
+              cam.running[cam_name] = False # stops frame_loop from restarting the reader
+              for procs in (cam.proc, cam.hls_proc): # stop ffmpeg first, Windows won't delete files it has open
+                if procs.get(cam_name):
+                  procs[cam_name].kill()
+                  with contextlib.suppress(Exception): procs[cam_name].wait(timeout=5)
+              # clear rather than pop, the capture loop may still touch this camera until its next 5s refresh
+              if cam_name in cam.live: cam.live[cam_name] = None
+              for state in (cam.events, cam.totals, cam.seen):
+                if cam_name in state: state[cam_name].clear()
               shutil.rmtree(BASE_DIR / "cameras" / cam_name, ignore_errors=True)
               if os.path.isfile(database.run_get("links", None)[cam_name]): os.remove(database.run_get("links", None)[cam_name])
               # todo clean
@@ -985,7 +1024,19 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           return
 
 
-        if parsed_path.path == '/' and "cam" not in query:
+        if parsed_path.path.startswith("/api/"):
+          self.handle_api_get(parsed_path.path, query)
+          return
+
+        if parsed_path.path in ("/", "/dashboard") and "cam" not in query:
+          with open("dashboard.html", "rb") as f: body = f.read()
+          self.send_response(200)
+          self.send_header('Content-type', 'text/html; charset=utf-8')
+          self.end_headers()
+          self.wfile.write(body)
+          return
+
+        if parsed_path.path == '/classic' and "cam" not in query:
           with open("mainview.html", "r", encoding="utf-8") as f: html = f.read()
           self.send_response(200)
           self.send_header('Content-type', 'text/html')
@@ -1055,8 +1106,73 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         with open(file_path, 'rb') as f:
             shutil.copyfileobj(f, self.wfile)
 
+    def send_json(self, obj, code=200):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_jpeg(self, data, live=None):
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        if live: self.send_header("X-Live", live)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_api_get(self, path, query):
+        cam_name = query.get("cam", [None])[0]
+        if path == "/api/streams":
+          now, out = time.time(), []
+          for name, src in database.run_get("links", None).items():
+            live = cam.live.get(name)
+            info = stream_info.get(src, {})
+            status = "live" if live and now - live["ts"] < 5 else "connecting"
+            out.append({"name": name, "src": src, "title": info.get("title"), "uploader": info.get("uploader"), "status": status,
+                        "fps": round(live["fps"], 1) if live else 0, "w": live["w"] if live else None, "h": live["h"] if live else None,
+                        "in_view": len(live["dets"]) if live else 0, "totals": dict(cam.totals.get(name, {}))})
+          return self.send_json(out)
+        if path == "/api/live":
+          live = cam.live.get(cam_name)
+          if not live: return self.send_json({"seq": -1, "dets": []})
+          return self.send_json({k: live[k] for k in ("seq", "ts", "fps", "w", "h", "dets")})
+        if path == "/api/frame": # the detections ride along in a header so boxes always match the exact frame
+          live = cam.live.get(cam_name)
+          if not live: return self.send_error(404)
+          if live["seq"] <= int(query.get("after", [-1])[0]):
+            self.send_response(204)
+            self.end_headers()
+            return
+          if live["jpeg"] is None: # encode lazily once per frame, shared by every viewer
+            live["jpeg"] = cv2.imencode(".jpg", live["frame"], [cv2.IMWRITE_JPEG_QUALITY, 82])[1].tobytes()
+          return self.send_jpeg(live["jpeg"], json.dumps({k: live[k] for k in ("seq", "ts", "fps", "w", "h", "dets")}))
+        if path == "/api/events":
+          since = float(query.get("since", [0])[0])
+          events = [e for name in list(cam.events) for e in list(cam.events[name]) if e["ts"] > since and (not cam_name or e["cam"] == cam_name)]
+          events.sort(key=lambda e: e["ts"], reverse=True)
+          return self.send_json([{k: v for k, v in e.items() if k != "thumb"} | {"has_thumb": e["thumb"] is not None} for e in events[:100]])
+        if path == "/api/event_thumb":
+          track_id = int(query.get("id", [-1])[0])
+          event = next((e for e in cam.events.get(cam_name, ()) if e["id"] == track_id and e["thumb"]), None)
+          if not event: return self.send_error(404)
+          return self.send_jpeg(event["thumb"])
+        self.send_error(404)
+
     def do_POST(self):
         parsed_path = urlparse(self.path)
+
+        if parsed_path.path == "/api/streams":
+          data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b"{}")
+          name = re.sub(r"[^A-Za-z0-9 _-]", "", str(data.get("name", ""))).strip()[:40]
+          url = str(data.get("url", "")).strip()
+          if not name or not url: return self.send_json({"error": "name and url are required"}, 400)
+          if name in database.run_get("links", None): return self.send_json({"error": f"a stream called {name} already exists"}, 409)
+          database.run_put("links", name, url)
+          return self.send_json({"name": name, "url": url})
 
         if self.path.startswith("/edit_settings"):
           content_length = int(self.headers.get('Content-Length', 0))
