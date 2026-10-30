@@ -146,6 +146,10 @@ def draw_rectangle_numpy(img, pt1, pt2, color, thickness=1):
     return img
 
 
+def playlist_duration(playlist):
+  try: return sum(float(line[8:].split(",")[0]) for line in playlist.read_text().splitlines() if line.startswith("#EXTINF:"))
+  except OSError: return 0.0
+
 def is_vod(cam_name): return Path("data/cameras", cam_name, "streams", "video").is_dir()
 
 def _get_stream_resolution(src):
@@ -214,6 +218,8 @@ class VideoCapture:
     self.events = {}
     self.totals = {}
     self.seen = {}
+    # stream time (seconds on the recording's timeline) of each frame, so the dashboard can line detections up with the video
+    self.stream_base, self.raw_index, self.raw_frame_t, self.cur_t, self.playlist_url, self.det_history = {}, {}, {}, {}, {}, {}
 
     #self.last_shapes_time = time.time()
     #self.det_shapes = []
@@ -259,6 +265,7 @@ class VideoCapture:
     self.events[cam_name] = deque(maxlen=60)
     self.totals[cam_name] = defaultdict(int)
     self.seen[cam_name] = set()
+    self.det_history[cam_name] = deque(maxlen=DETECT_FPS * 60) # a minute, comfortably more than the HLS player's delay
     alerts_on[cam_name] = True
 
   def start(self):
@@ -375,6 +382,9 @@ class VideoCapture:
           "-vf", f"fps={DETECT_FPS},scale={self.width[cam_name]}:{self.height[cam_name]}",
           "-"
       ]
+      # append_list continues the old playlist, so this run's frames start where its recorded segments end
+      self.stream_base[cam_name], self.raw_index[cam_name] = playlist_duration(path / "stream.m3u8"), 0
+      self.playlist_url[cam_name] = f"/{quote(cam_name)}/streams/{path.name}/stream.m3u8"
       proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
       if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
       return proc, proc
@@ -424,7 +434,11 @@ class VideoCapture:
               fail_count = 0
         else:
           fail_count = 0
-        self.raw_frame[cam_name] = np.frombuffer(raw_bytes, np.uint8).reshape((self.height[cam_name], self.width[cam_name], 3))
+        frame = np.frombuffer(raw_bytes, np.uint8).reshape((self.height[cam_name], self.width[cam_name], 3))
+        # the fps filter emits frames at exact 1/DETECT_FPS steps, so the index gives the stream time
+        self.raw_frame_t[cam_name] = self.stream_base.get(cam_name, 0) + self.raw_index.get(cam_name, 0) / DETECT_FPS
+        self.raw_index[cam_name] = self.raw_index.get(cam_name, 0) + 1
+        self.raw_frame[cam_name] = frame
         self.frame_num[cam_name] += 1
         time.sleep(1 / 100)
       except Exception as e:
@@ -453,11 +467,13 @@ class VideoCapture:
     if self.raw_frame[cam_name] is None: return
     if frame_num == last_frame_num: return # check before copying, this runs in a tight loop
     frame = self.raw_frame[cam_name].copy()
+    frame_t = self.raw_frame_t.get(cam_name, 0)
 
     # don't run inference when no active scheds
     if not any(counter.is_active() for _, counter in self.alert_counters[cam_name].items()): self.last_preds[cam_name] = [] # to remove annotation when no alerts active
     else:
       if not global_settings.use_notifs() or alerts_on[cam_name]:
+        self.cur_t[cam_name] = frame_t
         preds, frame = self.run_inference(frame, cam_name=cam_name)
         self.last_frames[cam_name].append(frame.numpy().copy())
         self.last_preds[cam_name] = preds.copy()
@@ -604,8 +620,10 @@ class VideoCapture:
           if scale < 1: crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
           thumb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
         self.events[cam_name].append({"cam": cam_name, "ts": now, "label": label, "score": round(float(x.score), 3), "id": int(x.track_id), "thumb": thumb})
-    self.live[cam_name] = {"seq": (prev["seq"] + 1) if prev else 0, "ts": now, "fps": fps, "frame": frame, "jpeg": None,
+    seq, t = (prev["seq"] + 1) if prev else 0, round(self.cur_t.get(cam_name, 0), 3)
+    self.live[cam_name] = {"seq": seq, "ts": now, "t": t, "fps": fps, "frame": frame, "jpeg": None,
                            "w": frame.shape[1], "h": frame.shape[0], "dets": dets}
+    self.det_history[cam_name].append({"seq": seq, "t": t, "dets": dets})
 
   def run_inference(self, frame, cam_name):
     global model
@@ -1090,8 +1108,15 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         if not file_path.exists():
             self.send_error(404)
             return
+        # read in one go: the file is closed before sending (an open playlist blocks ffmpeg's rename on Windows),
+        # and Content-Length lets players finish without waiting for the connection to close
+        try: body = file_path.read_bytes()
+        except OSError:
+            self.send_error(404)
+            return
 
         self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
         if file_path.suffix == '.m3u8':
             self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
             self.send_header('Cache-Control', 'no-cache')
@@ -1102,9 +1127,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         elif file_path.suffix == '.png':
             self.send_header('Content-Type', 'image/jpeg')
         self.end_headers()
-
-        with open(file_path, 'rb') as f:
-            shutil.copyfileobj(f, self.wfile)
+        self.wfile.write(body)
 
     def send_json(self, obj, code=200):
         body = json.dumps(obj).encode("utf-8")
@@ -1133,9 +1156,15 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             info = stream_info.get(src, {})
             status = "live" if live and now - live["ts"] < 5 else "connecting"
             out.append({"name": name, "src": src, "title": info.get("title"), "uploader": info.get("uploader"), "status": status,
+                        "playlist": cam.playlist_url.get(name), "t": live["t"] if live else None,
                         "fps": round(live["fps"], 1) if live else 0, "w": live["w"] if live else None, "h": live["h"] if live else None,
                         "in_view": len(live["dets"]) if live else 0, "totals": dict(cam.totals.get(name, {}))})
           return self.send_json(out)
+        if path == "/api/dets": # recent detection frames with their stream time, the dashboard syncs them to the video
+          after = int(query.get("after", [-1])[0])
+          live = cam.live.get(cam_name)
+          frames = [f for f in list(cam.det_history.get(cam_name, ())) if f["seq"] > after]
+          return self.send_json({"w": live["w"] if live else None, "h": live["h"] if live else None, "frames": frames})
         if path == "/api/live":
           live = cam.live.get(cam_name)
           if not live: return self.send_json({"seq": -1, "dets": []})
@@ -1463,6 +1492,12 @@ cams = dict()
 active_subprocesses = []
 import socket
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    # dual stack, browsers try ::1 for localhost first and an IPv4-only server costs ~300ms per connection
+    address_family = socket.AF_INET6 if socket.has_dualstack_ipv6() else socket.AF_INET
+    def server_bind(self):
+      if self.address_family == socket.AF_INET6: self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+      super().server_bind()
+
     def __init__(self, server_address, RequestHandlerClass):
       ThreadingMixIn.__init__(self)
       HTTPServer.__init__(self, server_address, RequestHandlerClass)
@@ -1620,7 +1655,7 @@ if __name__ == "__main__":
 
 
   try:
-    server = ThreadedHTTPServer(('0.0.0.0', 8080), RequestHandlerClass=HLSRequestHandler)
+    server = ThreadedHTTPServer(('::' if ThreadedHTTPServer.address_family == socket.AF_INET6 else '0.0.0.0', 8080), RequestHandlerClass=HLSRequestHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"Serving at http://{get_lan_ip()}:8080")
   except OSError as e:

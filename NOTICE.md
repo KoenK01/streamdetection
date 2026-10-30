@@ -13,3 +13,5 @@ Based on clearcam commit `cf3909f8a622408be3b5f9811e4a9a56426b3134` (2026-10-28)
 - Local webcam sources (`webcam:<device>`) and a `--webcam` flag
 - Windows support: `-fps_mode` instead of the removed `-vsync`, forward-slash paths for ffmpeg, a tinygrad import shim (`utils/windows_compat.py`), and a main loop that no longer starves the frame reader thread
 - Model downloads use the operating system certificate store (truststore)
+- Dashboard plays each stream's recording as smooth video (hls.js) and syncs detections to it by stream time (`/api/dets`), with a HUD overlay (track IDs, trails, velocity, telemetry, acquisition log)
+- HTTP server listens dual stack (IPv4 and IPv6) and sends static files with Content-Length

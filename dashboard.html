@@ -7,7 +7,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%233ee6c4' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%233ee6c4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
 <style>
   :root {
     --bg: #07090d;
@@ -29,6 +30,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
+    display: flex; flex-direction: column; overflow: hidden;
     background:
       radial-gradient(1200px 500px at 15% -10%, rgba(62, 230, 196, 0.08), transparent 60%),
       radial-gradient(900px 500px at 100% 0%, rgba(110, 120, 255, 0.07), transparent 60%),
@@ -42,26 +44,25 @@
 
   /* header */
   header {
-    position: sticky; top: 0; z-index: 20;
-    display: flex; align-items: center; gap: 24px;
-    padding: 14px 24px;
+    flex: none; z-index: 20;
+    display: flex; align-items: center; gap: 20px;
+    padding: 12px 24px;
     background: rgba(7, 9, 13, 0.72);
     backdrop-filter: blur(14px);
     border-bottom: 1px solid var(--line);
   }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; font-size: 16px; white-space: nowrap; }
   .brand svg { width: 26px; height: 26px; }
-  .brand small { font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 2px; }
-  .stats { display: flex; gap: 8px; margin-left: auto; }
+  .stats { display: flex; gap: 8px; margin-left: auto; min-width: 0; }
   .stat {
     display: flex; flex-direction: column; gap: 1px;
-    padding: 6px 14px; min-width: 104px;
+    padding: 5px 12px; min-width: 96px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   }
-  .stat b { font: 600 18px/1.2 var(--mono); letter-spacing: -0.02em; }
-  .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat b { font: 600 17px/1.2 var(--mono); letter-spacing: -0.02em; }
+  .stat span { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
   .btn {
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
     padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line-2);
     background: var(--panel-2); transition: background .15s, border-color .15s, transform .1s;
   }
@@ -71,9 +72,10 @@
   .btn.primary:hover { background: #63f0d4; }
   .btn svg { width: 16px; height: 16px; }
 
-  /* layout */
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; padding: 20px 24px 32px; }
-  .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  /* app shell: the page never scrolls on desktop, the stream area and the sidebar scroll on their own */
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; padding: 16px 24px 20px; }
+  section.streams { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .toolbar { flex: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
   .toolbar h2 { margin: 0 8px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip {
@@ -90,23 +92,48 @@
   .slider b { font: 600 12px var(--mono); color: var(--text); min-width: 34px; }
 
   /* stream grid */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; }
-  .grid.focus { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .grid.focus .tile.focused { grid-column: 1 / -1; order: -1; }
+  .grid {
+    flex: 1; min-height: 0; overflow: auto; padding: 2px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; align-content: start;
+  }
+  /* focus: the chosen stream fills whatever height is left, the others become a thumbnail strip underneath */
+  .grid.focus { overflow: hidden; grid-template-columns: repeat(auto-fill, 196px); grid-template-rows: minmax(0, 1fr); grid-auto-rows: 110px; align-content: stretch; gap: 12px; }
+  .grid.focus .tile { aspect-ratio: auto; cursor: pointer; }
+  .grid.focus .tile.focused { grid-column: 1 / -1; grid-row: 1; cursor: default; }
+  .grid.focus .tile:not(.focused) .bottom,
+  .grid.focus .tile:not(.focused) .actions,
+  .grid.focus .tile:not(.focused) .fps { display: none; }
+  .grid.focus .tile:not(.focused) .top { top: 8px; left: 8px; right: 8px; }
+  .grid.focus .tile:not(.focused) .name { font-size: 12px; }
+
   .tile {
-    position: relative; overflow: hidden;
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    position: relative; overflow: hidden; min-height: 0;
+    background: #05070a; border: 1px solid var(--line); border-radius: var(--radius);
     aspect-ratio: 16 / 9;
     box-shadow: 0 20px 40px -24px rgba(0,0,0,.8);
     animation: rise .35s ease both;
   }
+  .tile:fullscreen { border: 0; border-radius: 0; aspect-ratio: auto; width: 100%; height: 100%; background: #000; }
   @keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.99); } }
-  .tile canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .tile video, .tile canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .tile video { object-fit: cover; }
+  .tile.fit video { object-fit: contain; }
+  .tile .still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .tile.fit .still { object-fit: contain; }
+  /* CRT scanlines and a vignette on top of the picture, pure CSS so it costs nothing per frame */
+  .tile .crt {
+    position: absolute; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,.08) 0 1px, transparent 1px 4px),
+      radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.45) 100%);
+    mix-blend-mode: multiply;
+  }
+  .tile.hud-off .crt { display: none; }
   .tile .shade {
     position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(180deg, rgba(0,0,0,.55) 0%, transparent 22%, transparent 62%, rgba(0,0,0,.75) 100%);
+    background: linear-gradient(180deg, rgba(0,0,0,.5) 0%, transparent 18%, transparent 70%, rgba(0,0,0,.7) 100%);
   }
-  .tile .top, .tile .bottom { position: absolute; left: 14px; right: 14px; display: flex; align-items: center; gap: 8px; }
+  .tile .top, .tile .bottom { position: absolute; left: 14px; right: 14px; display: flex; align-items: center; gap: 8px; z-index: 2; }
   .tile .top { top: 12px; }
   .tile .bottom { bottom: 12px; align-items: flex-end; }
   .pill {
@@ -121,7 +148,7 @@
   .pill.wait::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); opacity: .9; }
   @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(255,77,94,0); } 100% { box-shadow: 0 0 0 0 rgba(255,77,94,0); } }
   .mono { font-family: var(--mono); }
-  .tile .name { font-weight: 600; font-size: 14px; text-shadow: 0 1px 8px rgba(0,0,0,.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .name { font-weight: 600; font-size: 14px; text-shadow: 0 1px 8px rgba(0,0,0,.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .tile .spacer { flex: 1; }
   .tile .meta { min-width: 0; flex: 1; }
   .tile .title { font-size: 12px; color: rgba(255,255,255,.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
@@ -130,7 +157,7 @@
   .count i { width: 7px; height: 7px; border-radius: 2px; }
   .count b { font-family: var(--mono); font-weight: 600; }
   .actions { display: flex; gap: 6px; opacity: 0; transform: translateY(-4px); transition: all .18s; }
-  .tile:hover .actions, .tile:focus-within .actions { opacity: 1; transform: none; }
+  .tile:hover .actions, .tile:focus-within .actions, .tile:fullscreen .actions { opacity: 1; transform: none; }
   .icon-btn {
     width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px;
     background: rgba(8,10,14,.62); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.1);
@@ -139,11 +166,12 @@
   .icon-btn.danger:hover { background: rgba(255,77,94,.25); border-color: rgba(255,77,94,.5); }
   .icon-btn svg { width: 15px; height: 15px; }
   .connecting {
-    position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 13px;
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 13px; z-index: 1;
     background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.04) 50%, transparent 70%) 0 0 / 200% 100%, var(--panel);
     animation: shimmer 1.8s linear infinite;
   }
   .connecting .ring { width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 50%; border: 2px solid rgba(62,230,196,.2); border-top-color: var(--accent); animation: spin .9s linear infinite; }
+  .connecting span { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
   @keyframes shimmer { to { background-position: -200% 0, 0 0; } }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -155,13 +183,14 @@
   .empty p { margin: 0 0 18px; max-width: 420px; }
 
   /* sidebar */
-  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-  .card-h { display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px; }
+  .card.grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .card-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px; }
   .card-h h3 { margin: 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .card-h .spacer { flex: 1; }
   .card-h small { color: var(--faint); font-size: 12px; }
-  .feed { list-style: none; margin: 0; padding: 0 8px 8px; max-height: calc(100vh - 420px); min-height: 220px; overflow: auto; }
+  .feed { flex: 1; min-height: 0; list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; }
   .feed li {
     display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center;
     padding: 8px; border-radius: 10px; animation: slidein .3s ease both;
@@ -174,7 +203,7 @@
   .feed .where { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .feed .when { font: 500 11px var(--mono); color: var(--faint); text-align: right; }
   .feed .empty-feed { display: block; padding: 30px 12px; text-align: center; color: var(--faint); }
-  .bars { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .bars { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 9px; max-height: 240px; overflow: auto; }
   .bar { display: grid; grid-template-columns: 84px 1fr 40px; gap: 10px; align-items: center; font-size: 12px; }
   .bar span { text-transform: capitalize; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar .track { height: 8px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
@@ -192,10 +221,10 @@
   .modal-b h3 { margin: 0; font-size: 18px; }
   .modal-b p { margin: 0; color: var(--muted); font-size: 13px; }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 500; }
-  input[type=text], input[type=url] {
+  input[type=text] {
     padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--bg); outline: none; transition: border-color .15s, box-shadow .15s;
   }
-  input[type=text]:focus, input[type=url]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(62,230,196,.15); }
+  input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(62,230,196,.15); }
   .presets { display: flex; gap: 6px; flex-wrap: wrap; }
   .presets button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); font-size: 12px; }
   .presets button:hover { border-color: var(--accent); }
@@ -211,19 +240,32 @@
   }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-  @media (max-width: 1100px) {
-    main { grid-template-columns: 1fr; }
-    .feed { max-height: 420px; }
-    .grid.focus { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* zoomed in or a smaller window: tighter header first */
+  @media (max-width: 1350px) {
+    header { gap: 14px; padding: 10px 18px; }
+    .stat { min-width: 0; padding: 4px 10px; }
+    .stat b { font-size: 15px; }
+    .stat span { font-size: 9.5px; }
+    main { grid-template-columns: minmax(0, 1fr) 290px; padding: 14px 18px 18px; gap: 16px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
   }
-  @media (max-width: 720px) {
-    header { flex-wrap: wrap; padding: 12px 16px; gap: 12px; }
+  /* narrow: back to a normal scrolling page with the sidebar under the streams */
+  @media (max-width: 1000px) {
+    body { overflow: auto; display: block; height: auto; }
+    header { position: sticky; top: 0; flex-wrap: wrap; }
     .stats { order: 3; width: 100%; overflow-x: auto; margin-left: 0; }
-    .stat { min-width: 92px; }
     #addBtn { margin-left: auto; }
-    main { padding: 16px; }
+    main { display: block; }
+    section.streams { display: block; }
+    .grid, .grid.focus { overflow: visible; grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: auto; }
+    .grid.focus .tile { aspect-ratio: 16 / 9; }
+    aside { margin-top: 16px; }
+    .feed { max-height: 420px; }
+  }
+  @media (max-width: 600px) {
+    header { padding: 10px 16px; }
+    main { padding: 12px 16px; }
     .grid { grid-template-columns: 1fr; }
-    .grid.focus { grid-template-columns: 1fr; }
     .slider { margin-left: 0; }
   }
   @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
@@ -233,7 +275,7 @@
 <header>
   <div class="brand">
     <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="#3ee6c4" stroke-width="2.5"/><circle cx="16" cy="16" r="5.5" fill="#3ee6c4"/><circle cx="18" cy="14" r="1.6" fill="#07090d"/></svg>
-    streamdetection <small>built on clearcam</small>
+    streamdetection
   </div>
   <div class="stats">
     <div class="stat"><b id="sLive">0/0</b><span>Streams live</span></div>
@@ -248,7 +290,7 @@
 </header>
 
 <main>
-  <section>
+  <section class="streams">
     <div class="toolbar">
       <h2>Streams</h2>
       <div class="chips" id="classChips"></div>
@@ -258,7 +300,7 @@
   </section>
 
   <aside>
-    <div class="card">
+    <div class="card grow">
       <div class="card-h"><h3>Activity</h3><span class="spacer"></span><small id="feedCount"></small></div>
       <ul class="feed" id="feed"><li class="empty-feed">New objects show up here as they enter a stream.</li></ul>
     </div>
@@ -302,6 +344,8 @@ const colorFor = (label) => {
   let h = 0; for (const c of label) h = (h * 31 + c.charCodeAt(0)) % 360;
   return `hsl(${h} 80% 65%)`;
 };
+const HUD = "#3ee6c4";
+const MONO = '"JetBrains Mono", ui-monospace, Consolas, monospace';
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const cleanTitle = (t) => (t || "").replace(/\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, "");
 const sourceLabel = (src) => {
@@ -309,6 +353,11 @@ const sourceLabel = (src) => {
   try { const u = new URL(src); return `${u.protocol.startsWith("rtsp") ? "RTSP" : u.pathname.endsWith(".m3u8") ? "HLS" : "Stream"} · ${u.hostname}`; } catch { return src; }
 };
 const ago = (ts) => { const s = Math.max(0, Date.now() / 1000 - ts); return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : `${(s / 3600) | 0}h`; };
+const pad = (n, w) => String(Math.max(0, Math.round(n))).padStart(w, "0");
+const clock = (d = new Date()) => d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// every request gets a deadline, a stuck connection must never freeze a tile
+const fetchT = (url, opts = {}, ms = 2500) => fetch(url, { cache: "no-store", ...opts, signal: AbortSignal.timeout(ms) });
 
 const state = { streams: [], tiles: new Map(), hidden: new Set(), seenLabels: new Set(), minConf: 0.4, focused: null, events: [], lastEventTs: 0 };
 try { state.hidden = new Set(JSON.parse(localStorage.getItem("cc_hidden") || "[]")); } catch {}
@@ -321,107 +370,326 @@ function toast(msg) {
 const ICONS = {
   expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>',
   shrink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>',
-  boxes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg>',
+  full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+  hud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="1.5"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>',
 };
+const MODES = ["hud", "boxes", "off"];
 
 function makeTile(s) {
   const el = document.createElement("div");
   el.className = "tile";
   el.innerHTML = `
+    <img class="still" alt="" hidden>
+    <video muted playsinline autoplay></video>
+    <div class="crt"></div>
     <canvas></canvas>
-    <div class="connecting"><div><div class="ring"></div>Connecting to stream</div></div>
+    <div class="connecting"><div><div class="ring"></div><span>Acquiring signal</span></div></div>
     <div class="shade"></div>
     <div class="top">
       <span class="pill wait">Connecting</span>
       <span class="name"></span>
       <span class="spacer"></span>
       <div class="actions">
-        <button class="icon-btn" data-act="boxes" title="Toggle boxes" aria-label="Toggle boxes">${ICONS.boxes}</button>
+        <button class="icon-btn" data-act="mode" title="Overlay: HUD" aria-label="Change overlay">${ICONS.hud}</button>
         <button class="icon-btn" data-act="focus" title="Focus" aria-label="Focus">${ICONS.expand}</button>
+        <button class="icon-btn" data-act="full" title="Fullscreen" aria-label="Fullscreen">${ICONS.full}</button>
         <button class="icon-btn danger" data-act="delete" title="Remove stream" aria-label="Remove stream">${ICONS.trash}</button>
       </div>
       <span class="pill mono fps">0 fps</span>
     </div>
     <div class="bottom"><div class="meta"><div class="title"></div><div class="counts"></div></div></div>`;
-  const tile = { name: s.name, el, canvas: el.querySelector("canvas"), ctx: el.querySelector("canvas").getContext("2d"),
-    seq: -1, bitmap: null, live: null, showBoxes: true, alive: true };
+  const tile = {
+    name: s.name, el, video: el.querySelector("video"), still: el.querySelector(".still"),
+    canvas: el.querySelector("canvas"), ctx: el.querySelector("canvas").getContext("2d"),
+    frames: [], w: null, h: null, afterSeq: -1, tracks: new Map(), mode: "hud", alive: true,
+    hls: null, playlist: null, playing: false, delay: 0, headT: 0, fps: 0, lastLive: 0,
+  };
   el.querySelector(".name").textContent = s.name;
   el.querySelector(".actions").addEventListener("click", (e) => {
+    e.stopPropagation();
     const act = e.target.closest("button")?.dataset.act;
-    if (act === "boxes") { tile.showBoxes = !tile.showBoxes; draw(tile); }
+    if (act === "mode") {
+      tile.mode = MODES[(MODES.indexOf(tile.mode) + 1) % MODES.length];
+      el.classList.toggle("hud-off", tile.mode !== "hud");
+      e.target.closest("button").title = `Overlay: ${tile.mode === "hud" ? "HUD" : tile.mode === "boxes" ? "boxes only" : "off"}`;
+      toast(`Overlay: ${tile.mode === "hud" ? "HUD" : tile.mode === "boxes" ? "boxes only" : "off"}`);
+    }
     if (act === "focus") setFocus(state.focused === s.name ? null : s.name);
+    if (act === "full") document.fullscreenElement === el ? document.exitFullscreen() : el.requestFullscreen?.();
     if (act === "delete") removeStream(s.name);
   });
+  el.addEventListener("click", () => { if (state.focused && state.focused !== s.name) setFocus(s.name); });
   el.addEventListener("dblclick", () => setFocus(state.focused === s.name ? null : s.name));
-  new ResizeObserver(() => draw(tile)).observe(el);
-  pump(tile);
+  tile.video.addEventListener("playing", () => { tile.playing = true; tile.still.hidden = true; el.querySelector(".connecting").style.display = "none"; });
+  pollDetections(tile);
+  warmup(tile);
   return tile;
 }
 
-// fetch frames one at a time, each JPEG carries the detections for exactly that frame
-async function pump(tile) {
+// attach the recorded HLS stream: smooth native-rate video, detections are synced to its timeline
+function attachVideo(tile, playlist) {
+  if (!playlist || tile.playlist === playlist) return;
+  tile.playlist = playlist;
+  tile.hls?.destroy();
+  const v = tile.video;
+  if (window.Hls?.isSupported()) {
+    // local segments load in milliseconds, so a slow one is a stuck connection: drop it and retry straight away
+    const quick = { maxTimeToFirstByteMs: 3000, maxLoadTimeMs: 3000,
+      timeoutRetry: { maxNumRetry: 6, retryDelayMs: 0, maxRetryDelayMs: 0 },
+      errorRetry: { maxNumRetry: 6, retryDelayMs: 250, maxRetryDelayMs: 1000 } };
+    const hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 5, maxLiveSyncPlaybackRate: 1.15, backBufferLength: 30,
+      fragLoadPolicy: { default: quick }, playlistLoadPolicy: { default: quick } });
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) { hls.destroy(); tile.playlist = null; tile.playing = false; } });
+    hls.loadSource(playlist); hls.attachMedia(v); tile.hls = hls;
+  } else if (v.canPlayType("application/vnd.apple.mpegurl")) { v.src = playlist; }
+  v.play().catch(() => {});
+}
+
+// until the video has buffered, show the detector's latest still so the tile is never empty
+async function warmup(tile) {
+  while (tile.alive && !tile.playing) {
+    try {
+      const r = await fetchT(`/api/frame?cam=${encodeURIComponent(tile.name)}`);
+      if (r.ok) {
+        const url = URL.createObjectURL(await r.blob());
+        tile.still.onload = () => URL.revokeObjectURL(url);
+        tile.still.src = url; tile.still.hidden = false;
+        tile.el.querySelector(".connecting").style.display = "none";
+      }
+    } catch {}
+    await sleep(700);
+  }
+}
+
+async function pollDetections(tile) {
   while (tile.alive) {
     try {
-      const r = await fetch(`/api/frame?cam=${encodeURIComponent(tile.name)}&after=${tile.seq}`, { cache: "no-store" });
-      if (r.status === 200) {
-        const live = JSON.parse(r.headers.get("X-Live"));
-        const bmp = await createImageBitmap(await r.blob());
-        tile.bitmap?.close?.();
-        Object.assign(tile, { bitmap: bmp, live, seq: live.seq });
-        draw(tile);
-      } else await sleep(r.status === 204 ? 25 : 1000);
-    } catch { await sleep(1000); }
-    if (document.hidden) await sleep(500);
+      const r = await (await fetchT(`/api/dets?cam=${encodeURIComponent(tile.name)}&after=${tile.afterSeq}`)).json();
+      if (r.frames.length) {
+        tile.w = r.w; tile.h = r.h;
+        tile.frames.push(...r.frames);
+        tile.afterSeq = r.frames[r.frames.length - 1].seq;
+        tile.headT = r.frames[r.frames.length - 1].t;
+        if (tile.frames.length > 1400) tile.frames.splice(0, tile.frames.length - 1400);
+      }
+    } catch {}
+    await sleep(document.hidden ? 1500 : 300);
   }
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function draw(tile) {
-  const { canvas, ctx, bitmap, live } = tile;
+// detections around the current playback time, interpolated per track so boxes glide at the video's frame rate
+function detsAt(tile, t) {
+  const f = tile.frames;
+  if (!f.length) return [];
+  let lo = 0, hi = f.length - 1;
+  if (t <= f[0].t) return Math.abs(f[0].t - t) < 0.15 ? f[0].dets : [];
+  if (t >= f[hi].t) return t - f[hi].t < 0.3 ? f[hi].dets : [];
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; f[m].t <= t ? lo = m : hi = m; }
+  const a = f[lo], b = f[hi];
+  if (b.t - a.t > 0.5) return t - a.t < 0.25 ? a.dets : [];
+  const k = (t - a.t) / (b.t - a.t);
+  const next = new Map(b.dets.map((d) => [d.id, d]));
+  return a.dets.map((d) => {
+    const n = next.get(d.id);
+    if (!n) return d;
+    return { ...d, score: n.score, box: d.box.map((v, i) => v + (n.box[i] - v) * k) };
+  });
+}
+
+function playbackTime(tile) {
+  if (tile.playing && tile.video.readyState >= 2) return tile.video.currentTime;
+  return tile.headT; // stills show the newest detector frame
+}
+
+// where the frame lands inside the tile for the current fit mode
+function frameRect(tile, W, H) {
+  const vw = tile.w || 16, vh = tile.h || 9;
+  const fit = tile.el.classList.contains("fit");
+  const scale = fit ? Math.min(W / vw, H / vh) : Math.max(W / vw, H / vh);
+  const dw = vw * scale, dh = vh * scale;
+  return { ox: (W - dw) / 2, oy: (H - dh) / 2, dw, dh, sx: dw / vw, sy: dh / vh };
+}
+
+function render(now) {
+  for (const tile of state.tiles.values()) drawTile(tile, now);
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+function drawTile(tile, now) {
+  const { canvas, ctx } = tile;
   const dpr = window.devicePixelRatio || 1;
-  const W = Math.round(canvas.clientWidth * dpr), H = Math.round(canvas.clientHeight * dpr);
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const W = Math.round(cw * dpr), H = Math.round(ch * dpr);
   if (!W || !H) return;
   if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
-  ctx.fillStyle = "#0b0e13"; ctx.fillRect(0, 0, W, H);
-  if (!bitmap) return;
-  // cover-fit the frame into the tile
-  const scale = Math.max(W / bitmap.width, H / bitmap.height);
-  const dw = bitmap.width * scale, dh = bitmap.height * scale, ox = (W - dw) / 2, oy = (H - dh) / 2;
-  ctx.drawImage(bitmap, ox, oy, dw, dh);
+  ctx.clearRect(0, 0, W, H);
+  if (!tile.w) return;
+  const t = playbackTime(tile);
+  tile.delay = tile.playing ? Math.max(0, tile.headT - t) : 0;
+  const R = frameRect(tile, W, H);
+  const dets = detsAt(tile, t).filter((d) => d.score >= state.minConf && !state.hidden.has(d.label));
   const counts = {};
-  const dets = (live?.dets || []).filter((d) => d.score >= state.minConf);
-  for (const d of dets) {
-    state.seenLabels.add(d.label);
-    if (state.hidden.has(d.label)) continue;
-    counts[d.label] = (counts[d.label] || 0) + 1;
-    if (!tile.showBoxes) continue;
-    const sx = dw / live.w, sy = dh / live.h;
-    const x1 = ox + d.box[0] * sx, y1 = oy + d.box[1] * sy, x2 = ox + d.box[2] * sx, y2 = oy + d.box[3] * sy;
-    drawBox(ctx, x1, y1, x2, y2, colorFor(d.label), `${d.label} ${Math.round(d.score * 100)}%`, dpr);
-  }
+  for (const d of dets) { state.seenLabels.add(d.label); counts[d.label] = (counts[d.label] || 0) + 1; }
   renderCounts(tile, counts);
+  updateTracks(tile, dets, t);
+  if (tile.mode === "off") return;
+  const big = cw >= 620;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(R.ox, R.oy, R.dw, R.dh); ctx.clip();
+  if (tile.mode === "hud") drawHudBackground(ctx, R, dpr, now, big);
+  for (const d of dets) drawTarget(tile, ctx, d, R, dpr, t, big);
+  ctx.restore();
+  if (tile.mode === "hud") drawTelemetry(tile, ctx, W, H, R, dpr, dets.length, big);
 }
 
-function drawBox(ctx, x1, y1, x2, y2, color, text, dpr) {
-  const w = x2 - x1, h = y2 - y1, c = Math.min(18 * dpr, w / 3, h / 3);
+// track history in stream time: trails, velocity and when each track was first locked
+function updateTracks(tile, dets, t) {
+  for (const d of dets) {
+    let tr = tile.tracks.get(d.id);
+    if (!tr) { tr = { first: t, pts: [] }; tile.tracks.set(d.id, tr); }
+    const cx = (d.box[0] + d.box[2]) / 2, cy = (d.box[1] + d.box[3]) / 2;
+    const last = tr.pts[tr.pts.length - 1];
+    if (last && t < last.t) tr.pts.length = 0; // timeline jumped back (seek or restart)
+    if (!last || t - last.t > 0.03) tr.pts.push({ x: cx, y: cy, t });
+    while (tr.pts.length && t - tr.pts[0].t > 2.5) tr.pts.shift();
+    tr.seen = t;
+  }
+  if (tile.tracks.size > 300 || Math.random() < 0.02)
+    for (const [id, tr] of tile.tracks) if (Math.abs(t - tr.seen) > 6) tile.tracks.delete(id);
+}
+
+function drawHudBackground(ctx, R, dpr, now, big) {
+  // faint targeting grid
+  ctx.strokeStyle = "rgba(62,230,196,0.07)"; ctx.lineWidth = 1;
+  ctx.beginPath();
+  const n = big ? 12 : 6;
+  for (let i = 1; i < n; i++) {
+    const x = R.ox + (R.dw * i) / n, y = R.oy + (R.dh * i) / n;
+    ctx.moveTo(x, R.oy); ctx.lineTo(x, R.oy + R.dh); ctx.moveTo(R.ox, y); ctx.lineTo(R.ox + R.dw, y);
+  }
+  ctx.stroke();
+  // sweeping scan beam
+  const p = (now % 4200) / 4200, y = R.oy + p * R.dh;
+  const g = ctx.createLinearGradient(0, y - 60 * dpr, 0, y);
+  g.addColorStop(0, "rgba(62,230,196,0)"); g.addColorStop(1, "rgba(62,230,196,0.10)");
+  ctx.fillStyle = g; ctx.fillRect(R.ox, y - 60 * dpr, R.dw, 60 * dpr);
+  ctx.fillStyle = "rgba(62,230,196,0.35)"; ctx.fillRect(R.ox, y, R.dw, 1 * dpr);
+  // centre reticle
+  const cx = R.ox + R.dw / 2, cy = R.oy + R.dh / 2, r = 10 * dpr;
+  ctx.strokeStyle = "rgba(62,230,196,0.35)"; ctx.lineWidth = 1 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 2, cy); ctx.lineTo(cx - r, cy); ctx.moveTo(cx + r, cy); ctx.lineTo(cx + r * 2, cy);
+  ctx.moveTo(cx, cy - r * 2); ctx.lineTo(cx, cy - r); ctx.moveTo(cx, cy + r); ctx.lineTo(cx, cy + r * 2);
+  ctx.stroke();
+}
+
+function drawTarget(tile, ctx, d, R, dpr, t, big) {
+  const color = colorFor(d.label);
+  const x1 = R.ox + d.box[0] * R.sx, y1 = R.oy + d.box[1] * R.sy, x2 = R.ox + d.box[2] * R.sx, y2 = R.oy + d.box[3] * R.sy;
+  const w = x2 - x1, h = y2 - y1, c = Math.min(16 * dpr, w / 3, h / 3);
+  const tr = tile.tracks.get(d.id);
+  const hud = tile.mode === "hud";
   ctx.save();
-  ctx.fillStyle = color; ctx.globalAlpha = 0.08; ctx.fillRect(x1, y1, w, h);
-  ctx.globalAlpha = 0.45; ctx.strokeStyle = color; ctx.lineWidth = 1 * dpr; ctx.strokeRect(x1, y1, w, h);
-  // corner brackets
-  ctx.globalAlpha = 1; ctx.lineWidth = 2.5 * dpr; ctx.lineCap = "round";
+  // motion trail
+  if (hud && tr && tr.pts.length > 1) {
+    ctx.lineWidth = 2 * dpr; ctx.lineCap = "round"; ctx.strokeStyle = color;
+    for (let i = 1; i < tr.pts.length; i++) {
+      const a = tr.pts[i - 1], b = tr.pts[i];
+      ctx.globalAlpha = (i / tr.pts.length) * 0.7;
+      ctx.beginPath(); ctx.moveTo(R.ox + a.x * R.sx, R.oy + a.y * R.sy); ctx.lineTo(R.ox + b.x * R.sx, R.oy + b.y * R.sy); ctx.stroke();
+    }
+    // velocity vector, half a second ahead
+    const a = tr.pts[Math.max(0, tr.pts.length - 6)], b = tr.pts[tr.pts.length - 1];
+    if (b.t - a.t > 0.05) {
+      const vx = (b.x - a.x) / (b.t - a.t), vy = (b.y - a.y) / (b.t - a.t);
+      if (Math.hypot(vx, vy) * R.sx > 12 * dpr) {
+        const sx = R.ox + b.x * R.sx, sy = R.oy + b.y * R.sy, ex = sx + vx * 0.5 * R.sx, ey = sy + vy * 0.5 * R.sy;
+        ctx.globalAlpha = 0.9; ctx.setLineDash([4 * dpr, 3 * dpr]);
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke(); ctx.setLineDash([]);
+        const ang = Math.atan2(ey - sy, ex - sx), ah = 6 * dpr;
+        ctx.beginPath(); ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - ah * Math.cos(ang - 0.5), ey - ah * Math.sin(ang - 0.5));
+        ctx.lineTo(ex - ah * Math.cos(ang + 0.5), ey - ah * Math.sin(ang + 0.5)); ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+      }
+    }
+  }
+  // box: faint fill, thin frame, bright corner brackets
+  ctx.globalAlpha = 0.07; ctx.fillStyle = color; ctx.fillRect(x1, y1, w, h);
+  ctx.globalAlpha = 0.4; ctx.strokeStyle = color; ctx.lineWidth = 1 * dpr; ctx.strokeRect(x1, y1, w, h);
+  ctx.globalAlpha = 1; ctx.lineWidth = 2.2 * dpr; ctx.lineCap = "square";
   ctx.beginPath();
   ctx.moveTo(x1, y1 + c); ctx.lineTo(x1, y1); ctx.lineTo(x1 + c, y1);
   ctx.moveTo(x2 - c, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + c);
   ctx.moveTo(x2, y2 - c); ctx.lineTo(x2, y2); ctx.lineTo(x2 - c, y2);
   ctx.moveTo(x1 + c, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - c);
   ctx.stroke();
-  if (w > 26 * dpr) {
-    ctx.font = `600 ${11 * dpr}px Inter, system-ui, sans-serif`;
-    const tw = ctx.measureText(text).width, ph = 18 * dpr, px = 6 * dpr;
-    const ly = y1 - ph - 3 * dpr < 0 ? y1 + 3 * dpr : y1 - ph - 3 * dpr;
-    ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x1, ly, tw + px * 2, ph, 5 * dpr); ctx.fill();
-    ctx.fillStyle = "#06090d"; ctx.textBaseline = "middle"; ctx.fillText(text, x1 + px, ly + ph / 2 + 0.5 * dpr);
+  if (hud) {
+    // centre tick
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, k = 4 * dpr;
+    ctx.lineWidth = 1 * dpr; ctx.beginPath(); ctx.moveTo(mx - k, my); ctx.lineTo(mx + k, my); ctx.moveTo(mx, my - k); ctx.lineTo(mx, my + k); ctx.stroke();
+    // lock-on flash for a new track
+    const age = tr ? t - tr.first : 9;
+    if (age < 0.9) {
+      const e = 1 - age / 0.9, g = (1 - e) * 18 * dpr + 3 * dpr;
+      ctx.globalAlpha = e; ctx.lineWidth = 1.5 * dpr; ctx.strokeRect(x1 - g, y1 - g, w + g * 2, h + g * 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+  // labels
+  if (w > 18 * dpr) {
+    const fs = (big ? 10.5 : 9.5) * dpr;
+    ctx.font = `700 ${fs}px ${MONO}`; ctx.textBaseline = "middle";
+    const age = tr ? Math.max(0, t - tr.first) : 0;
+    const line1 = hud ? `TRK#${pad(d.id, 3)} ${d.label.toUpperCase()} ${Math.round(d.score * 100)}%` : `${d.label} ${Math.round(d.score * 100)}%`;
+    const tw = ctx.measureText(line1).width, ph = fs + 7 * dpr, px = 5 * dpr;
+    const ly = y1 - ph - 2 * dpr < R.oy ? y2 + 2 * dpr : y1 - ph - 2 * dpr;
+    ctx.fillStyle = color; ctx.fillRect(x1, ly, tw + px * 2, ph);
+    ctx.fillStyle = "#04070a"; ctx.fillText(line1, x1 + px, ly + ph / 2 + 0.5 * dpr);
+    if (hud && big) {
+      const cx = (d.box[0] + d.box[2]) / 2, cy = (d.box[1] + d.box[3]) / 2;
+      const line2 = `X${pad(cx, 4)} Y${pad(cy, 4)}  ${Math.round(d.box[2] - d.box[0])}x${Math.round(d.box[3] - d.box[1])}  T+${age.toFixed(1)}S`;
+      ctx.font = `600 ${9 * dpr}px ${MONO}`;
+      const tw2 = ctx.measureText(line2).width, ph2 = 9 * dpr + 6 * dpr;
+      const ly2 = ly < y1 ? ly - ph2 : ly + ph;
+      ctx.fillStyle = "rgba(4,7,10,0.72)"; ctx.fillRect(x1, ly2, tw2 + px * 2, ph2);
+      ctx.fillStyle = color; ctx.fillText(line2, x1 + px, ly2 + ph2 / 2 + 0.5 * dpr);
+    }
+  }
+  ctx.restore();
+}
+
+function drawTelemetry(tile, ctx, W, H, R, dpr, nDets, big) {
+  const fs = (big ? 10.5 : 9) * dpr, lh = fs * 1.55;
+  ctx.save();
+  ctx.font = `600 ${fs}px ${MONO}`; ctx.textBaseline = "top";
+  ctx.shadowColor = "rgba(0,0,0,.9)"; ctx.shadowBlur = 4 * dpr;
+  const left = Math.max(R.ox, 0) + 16 * dpr, top = 48 * dpr;
+  const lines = [
+    `SRC ${tile.w}x${tile.h}  SEQ ${pad(tile.afterSeq, 6)}`,
+    `DET ${tile.fps.toFixed(1)} FPS  DELAY ${tile.delay.toFixed(1)}S`,
+    `TRK ${pad(nDets, 2)} LOCKED  ${pad(tile.tracks.size, 3)} BUFFERED`,
+  ];
+  ctx.fillStyle = HUD;
+  (big ? lines : lines.slice(0, 1)).forEach((l, i) => ctx.fillText(l, left, top + i * lh));
+  if (big) {
+    ctx.textAlign = "right";
+    const right = Math.min(R.ox + R.dw, W) - 16 * dpr;
+    ctx.fillText(clock(), right, top);
+    ctx.fillStyle = "rgba(62,230,196,.7)";
+    ctx.fillText("YOLOV9 · OC-SORT", right, top + lh);
+    // what the system just registered, shown in step with the video
+    const now = Date.now() / 1000;
+    const log = state.events.filter((e) => e.cam === tile.name && now - e.ts >= tile.delay).slice(0, 5);
+    ctx.textBaseline = "bottom";
+    const bottom = Math.min(R.oy + R.dh, H) - 64 * dpr;
+    log.forEach((e, i) => {
+      ctx.globalAlpha = 1 - i * 0.16;
+      ctx.fillStyle = i === 0 ? HUD : "rgba(62,230,196,.8)";
+      const when = new Date((e.ts + tile.delay) * 1000).toTimeString().slice(0, 8);
+      ctx.fillText(`[${when}] ACQ TRK#${pad(e.id, 3)} ${e.label.toUpperCase()} ${Math.round(e.score * 100)}%`, right, bottom - i * lh);
+    });
   }
   ctx.restore();
 }
@@ -441,9 +709,13 @@ function setFocus(name) {
   $("#grid").classList.toggle("focus", !!name);
   for (const [n, t] of state.tiles) {
     t.el.classList.toggle("focused", n === name);
+    syncFit(t);
     t.el.querySelector('[data-act="focus"]').innerHTML = n === name ? ICONS.shrink : ICONS.expand;
   }
 }
+// big views show the whole frame (letterboxed), grid tiles fill their box
+function syncFit(t) { t.el.classList.toggle("fit", t.el.classList.contains("focused") || document.fullscreenElement === t.el); }
+document.addEventListener("fullscreenchange", () => state.tiles.forEach(syncFit));
 
 async function removeStream(name) {
   if (!confirm(`Remove "${name}" and its recordings?`)) return;
@@ -455,19 +727,20 @@ async function removeStream(name) {
 
 async function refreshStreams() {
   let streams;
-  try { streams = await (await fetch("/api/streams", { cache: "no-store" })).json(); } catch { return; }
+  try { streams = await (await fetchT("/api/streams")).json(); } catch { return; }
   state.streams = streams;
   const grid = $("#grid");
   const names = new Set(streams.map((s) => s.name));
-  for (const [n, t] of state.tiles) if (!names.has(n)) { t.alive = false; t.el.remove(); state.tiles.delete(n); }
+  for (const [n, t] of state.tiles) if (!names.has(n)) { t.alive = false; t.hls?.destroy(); t.el.remove(); state.tiles.delete(n); }
   for (const s of streams) {
     let t = state.tiles.get(s.name);
     if (!t) { t = makeTile(s); state.tiles.set(s.name, t); grid.appendChild(t.el); }
     const live = s.status === "live";
+    t.fps = s.fps || 0;
+    if (live) attachVideo(t, s.playlist);
     const pill = t.el.querySelector(".pill");
     pill.className = `pill ${live ? "live" : "wait"}`;
     pill.textContent = live ? "LIVE" : "Connecting";
-    t.el.querySelector(".connecting").style.display = t.bitmap ? "none" : "";
     t.el.querySelector(".fps").textContent = `${live ? s.fps.toFixed(0) : 0} fps`;
     t.el.querySelector(".title").textContent = cleanTitle(s.title) || sourceLabel(s.src);
   }
@@ -511,32 +784,41 @@ $("#classChips").addEventListener("click", (e) => {
   if (!l) return;
   state.hidden.has(l) ? state.hidden.delete(l) : state.hidden.add(l);
   try { localStorage.setItem("cc_hidden", JSON.stringify([...state.hidden])); } catch {}
-  renderChips(); state.tiles.forEach(draw);
+  renderChips();
 });
-$("#conf").addEventListener("input", (e) => {
-  state.minConf = e.target.value / 100; $("#confVal").textContent = `${e.target.value}%`; state.tiles.forEach(draw);
-});
+$("#conf").addEventListener("input", (e) => { state.minConf = e.target.value / 100; $("#confVal").textContent = `${e.target.value}%`; });
 
 async function refreshEvents() {
-  let events;
-  try { events = await (await fetch(`/api/events?since=${state.lastEventTs}`, { cache: "no-store" })).json(); } catch { return; }
-  if (events.length) {
-    state.lastEventTs = events[0].ts;
-    state.events = [...events, ...state.events].slice(0, 100);
-    events.forEach((e) => state.seenLabels.add(e.label));
-    renderChips();
-  }
+  try {
+    const events = await (await fetchT(`/api/events?since=${state.lastEventTs}`)).json();
+    if (events.length) {
+      state.lastEventTs = events[0].ts;
+      state.events = [...events, ...state.events].slice(0, 150);
+      events.forEach((e) => state.seenLabels.add(e.label));
+      renderChips();
+    }
+  } catch {}
+  renderFeed();
+}
+
+// the feed waits for each stream's video delay, so an object shows up here when you actually see it
+function renderFeed() {
+  const now = Date.now() / 1000;
+  const delayOf = (cam) => state.tiles.get(cam)?.delay || 0;
+  const shown = state.events.filter((e) => !state.hidden.has(e.label) && e.score >= state.minConf && now - e.ts >= delayOf(e.cam)).slice(0, 100);
   const feed = $("#feed");
-  const shown = state.events.filter((e) => !state.hidden.has(e.label) && e.score >= state.minConf);
   $("#feedCount").textContent = shown.length ? `${shown.length} recent` : "";
+  const key = shown.map((e) => `${e.cam}:${e.id}`).join(",");
+  if (key === renderFeed.key) return;
+  const before = new Set((renderFeed.key || "").split(","));
+  renderFeed.key = key;
   if (!shown.length) { feed.innerHTML = `<li class="empty-feed">New objects show up here as they enter a stream.</li>`; return; }
-  const fresh = new Set(events.map((e) => `${e.cam}:${e.id}`));
   feed.innerHTML = shown.map((e) => `
-    <li style="${fresh.has(`${e.cam}:${e.id}`) ? "" : "animation:none"}">
+    <li style="${before.has(`${e.cam}:${e.id}`) ? "animation:none" : ""}">
       ${e.has_thumb ? `<img class="thumb" loading="lazy" src="/api/event_thumb?cam=${encodeURIComponent(e.cam)}&id=${e.id}" alt="">` : `<div class="thumb"></div>`}
       <div style="min-width:0"><div class="what"><i style="background:${colorFor(e.label)}"></i>${esc(e.label)}</div>
       <div class="where">${esc(e.cam)} · ${Math.round(e.score * 100)}% · #${e.id}</div></div>
-      <div class="when" data-ts="${e.ts}">${ago(e.ts)}</div>
+      <div class="when" data-ts="${e.ts + delayOf(e.cam)}">${ago(e.ts + delayOf(e.cam))}</div>
     </li>`).join("");
 }
 
@@ -565,7 +847,7 @@ $("#addForm").addEventListener("submit", async (e) => {
 
 refreshStreams(); refreshEvents();
 setInterval(refreshStreams, 2000);
-setInterval(refreshEvents, 1500);
+setInterval(refreshEvents, 1000);
 setInterval(() => document.querySelectorAll(".when[data-ts]").forEach((el) => el.textContent = ago(+el.dataset.ts)), 5000);
 </script>
 </body>
