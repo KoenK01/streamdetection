@@ -487,14 +487,40 @@ function detsAt(tile, t) {
   if (t >= f[hi].t) return t - f[hi].t < 0.3 ? f[hi].dets : [];
   while (hi - lo > 1) { const m = (lo + hi) >> 1; f[m].t <= t ? lo = m : hi = m; }
   const a = f[lo], b = f[hi];
-  if (b.t - a.t > 0.5) return t - a.t < 0.25 ? a.dets : [];
+  if (b.t - a.t > 0.5) return withHeld(f, lo, t, t - a.t < 0.25 ? a.dets : []);
   const k = (t - a.t) / (b.t - a.t);
   const next = new Map(b.dets.map((d) => [d.id, d]));
-  return a.dets.map((d) => {
+  return withHeld(f, lo, t, a.dets.map((d) => {
     const n = next.get(d.id);
     if (!n) return d;
     return { ...d, score: n.score, box: d.box.map((v, i) => v + (n.box[i] - v) * k) };
-  });
+  }));
+}
+
+// a track the detector briefly loses keeps moving along its last velocity and fades out,
+// instead of blinking off and on; most gaps are shorter than this
+const HOLD = 1.2;
+function withHeld(f, lo, t, dets) {
+  const have = new Set(dets.map((d) => d.id));
+  const out = [...dets];
+  for (let i = lo; i >= 0 && t - f[i].t <= HOLD; i--)
+    for (const d of f[i].dets) {
+      if (have.has(d.id)) continue;
+      have.add(d.id);
+      const held = t - f[i].t;
+      let v = [0, 0];
+      for (let j = i - 1; j >= 0 && f[i].t - f[j].t <= 0.6; j--) {
+        const p = f[j].dets.find((x) => x.id === d.id);
+        if (p && f[i].t - f[j].t >= 0.15) {
+          const dt = f[i].t - f[j].t;
+          v = [(d.box[0] + d.box[2] - p.box[0] - p.box[2]) / 2 / dt, (d.box[1] + d.box[3] - p.box[1] - p.box[3]) / 2 / dt];
+          break;
+        }
+      }
+      const dx = v[0] * held, dy = v[1] * held;
+      out.push({ ...d, held, box: [d.box[0] + dx, d.box[1] + dy, d.box[2] + dx, d.box[3] + dy] });
+    }
+  return out;
 }
 
 function playbackTime(tile) {
@@ -590,6 +616,7 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
   const x1 = R.ox + d.box[0] * R.sx, y1 = R.oy + d.box[1] * R.sy, x2 = R.ox + d.box[2] * R.sx, y2 = R.oy + d.box[3] * R.sy;
   const w = x2 - x1, h = y2 - y1, c = Math.min(16 * dpr, w / 3, h / 3);
   const tr = tile.tracks.get(d.id);
+  const fade = d.held > 0.25 ? Math.max(0, 1 - (d.held - 0.25) / (HOLD - 0.25)) : 1; // held boxes stay solid briefly, then fade
   const hud = tile.mode === "hud";
   ctx.save();
   // motion trail
@@ -597,7 +624,7 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
     ctx.lineWidth = 2 * dpr; ctx.lineCap = "round"; ctx.strokeStyle = color;
     for (let i = 1; i < tr.pts.length; i++) {
       const a = tr.pts[i - 1], b = tr.pts[i];
-      ctx.globalAlpha = (i / tr.pts.length) * 0.7;
+      ctx.globalAlpha = fade * (i / tr.pts.length) * 0.7;
       ctx.beginPath(); ctx.moveTo(R.ox + a.x * R.sx, R.oy + a.y * R.sy); ctx.lineTo(R.ox + b.x * R.sx, R.oy + b.y * R.sy); ctx.stroke();
     }
     // velocity vector, half a second ahead
@@ -606,7 +633,7 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
       const vx = (b.x - a.x) / (b.t - a.t), vy = (b.y - a.y) / (b.t - a.t);
       if (Math.hypot(vx, vy) * R.sx > 12 * dpr) {
         const sx = R.ox + b.x * R.sx, sy = R.oy + b.y * R.sy, ex = sx + vx * 0.5 * R.sx, ey = sy + vy * 0.5 * R.sy;
-        ctx.globalAlpha = 0.9; ctx.setLineDash([4 * dpr, 3 * dpr]);
+        ctx.globalAlpha = fade * 0.9; ctx.setLineDash([4 * dpr, 3 * dpr]);
         ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke(); ctx.setLineDash([]);
         const ang = Math.atan2(ey - sy, ex - sx), ah = 6 * dpr;
         ctx.beginPath(); ctx.moveTo(ex, ey);
@@ -616,9 +643,9 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
     }
   }
   // box: faint fill, thin frame, bright corner brackets
-  ctx.globalAlpha = 0.07; ctx.fillStyle = color; ctx.fillRect(x1, y1, w, h);
-  ctx.globalAlpha = 0.4; ctx.strokeStyle = color; ctx.lineWidth = 1 * dpr; ctx.strokeRect(x1, y1, w, h);
-  ctx.globalAlpha = 1; ctx.lineWidth = 2.2 * dpr; ctx.lineCap = "square";
+  ctx.globalAlpha = fade * 0.07; ctx.fillStyle = color; ctx.fillRect(x1, y1, w, h);
+  ctx.globalAlpha = fade * 0.4; ctx.strokeStyle = color; ctx.lineWidth = 1 * dpr; ctx.strokeRect(x1, y1, w, h);
+  ctx.globalAlpha = fade * 1; ctx.lineWidth = 2.2 * dpr; ctx.lineCap = "square";
   ctx.beginPath();
   ctx.moveTo(x1, y1 + c); ctx.lineTo(x1, y1); ctx.lineTo(x1 + c, y1);
   ctx.moveTo(x2 - c, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + c);
@@ -633,8 +660,8 @@ function drawTarget(tile, ctx, d, R, dpr, t, big) {
     const age = tr ? t - tr.first : 9;
     if (age < 0.9) {
       const e = 1 - age / 0.9, g = (1 - e) * 18 * dpr + 3 * dpr;
-      ctx.globalAlpha = e; ctx.lineWidth = 1.5 * dpr; ctx.strokeRect(x1 - g, y1 - g, w + g * 2, h + g * 2);
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = fade * e; ctx.lineWidth = 1.5 * dpr; ctx.strokeRect(x1 - g, y1 - g, w + g * 2, h + g * 2);
+      ctx.globalAlpha = fade * 1;
     }
   }
   // labels

@@ -255,7 +255,8 @@ class VideoCapture:
     self.last_counter_update[cam_name] = time.time()
     self.pred_occs[cam_name] = {}
     self.hls_proc[cam_name], self.proc[cam_name] = self._open_ffmpeg(cam_name)
-    self.tracker[cam_name] = ocsort.OCSort(max_age=100)
+    # min_hits 2 shows new objects a frame sooner, use_byte keeps tracks alive through low confidence frames
+    self.tracker[cam_name] = ocsort.OCSort(max_age=100, min_hits=2, use_byte=True)
     self.count[cam_name] = 0
     self.prev_time[cam_name] = time.time()
     self.current_stream_dir_raw[cam_name] = self._get_new_stream_dir(cam_name)
@@ -630,7 +631,7 @@ class VideoCapture:
     raw = frame
     frame = Tensor(frame)
     preds = jit_infer(model, frame, yolo_jit_cache).numpy()
-    thresh = (self.settings[cam_name].get("threshold") if self.settings[cam_name] else 0.5) or 0.5 #todo clean!
+    thresh = (self.settings[cam_name].get("threshold") if self.settings[cam_name] else 0.4) or 0.4 #todo clean!
     online_targets = self.tracker[cam_name].update(preds, thresh)
     self.update_live(cam_name, raw, online_targets)
     online_targets = [p for p in online_targets if (classes is None or str(int(p.class_id)) in classes)]
@@ -1164,6 +1165,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           after = int(query.get("after", [-1])[0])
           live = cam.live.get(cam_name)
           frames = [f for f in list(cam.det_history.get(cam_name, ())) if f["seq"] > after]
+          if after < 0 and frames: frames = [f for f in frames if f["t"] >= frames[-1]["t"] - 30] # first load: enough to cover the player's delay
           return self.send_json({"w": live["w"] if live else None, "h": live["h"] if live else None, "frames": frames})
         if path == "/api/live":
           live = cam.live.get(cam_name)
@@ -1569,7 +1571,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         print(f"Deleted oldest recording: {oldest_recording}")
 
 class GlobalSettings:
-  def __init__(self, use_clip=False, use_face=False ,model_size="t", model_res=960, userID=None, key=None, use_qwen=False, qwen_size=2,
+  def __init__(self, use_clip=False, use_face=False ,model_size="s", model_res=1280, userID=None, key=None, use_qwen=False, qwen_size=2,
                qwen_prompt="What has been detected on my CCTV camera? Write in one short sentence", server_url="https://clearcam.org"):
     self.use_clip = use_clip
     self.use_face = use_face

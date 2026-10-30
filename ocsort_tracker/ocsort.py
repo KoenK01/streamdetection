@@ -295,7 +295,9 @@ class OCSort(object):
                     we didn't notice significant difference here
                 """
                 d = trk.last_observation[:4]
-            if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+            # once a track has been confirmed, one missed frame no longer hides it until it builds a new streak
+            if trk.hit_streak >= self.min_hits: trk.confirmed = True
+            if (trk.time_since_update < 1) and (getattr(trk, "confirmed", False) or trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
                 # +1 as MOT benchmark requires positive
                 ret.append(np.concatenate((d, [trk.id+1, trk.age, trk.class_id, trk.score, trk.speed])).reshape(1, -1))
             i -= 1
